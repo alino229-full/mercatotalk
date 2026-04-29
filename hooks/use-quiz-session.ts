@@ -1,0 +1,466 @@
+import * as Speech from 'expo-speech';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import { getAllQuizItems, type QuizBankItem } from '@/data/quiz-bank';
+import { addXp, getAllCards, insertLearningSession, unlockAchievement, updateCardAfterReview } from '@/database/italpro-local-db';
+import { fetchGroqQuizItems } from '@/services/groq-quiz-client';
+import { errorFeedback, successFeedback, warningFeedback } from '@/services/haptics';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export type QuestionType = 'it_to_fr' | 'fr_to_it' | 'listen_to_fr';
+
+export type QuizChoice = { id: string; label: string };
+
+export type QuizQuestion = {
+  uid: string;
+  type: QuestionType;
+  prompt: string;
+  choices: QuizChoice[];
+  correctId: string;
+  it: string;
+  fr: string;
+  phonetic?: string | null;
+  category: string;
+  sm2CardId?: string;
+};
+
+export type QuizAnswerState = 'unanswered' | 'correct' | 'wrong';
+
+export type QuizResult = {
+  correct: boolean;
+  question: QuizQuestion;
+  selectedId: string;
+};
+
+export type QuizSource = 'local' | 'groq' | 'mixed';
+
+export type QuizSessionOptions = {
+  seriesSize?: number;
+};
+
+export type QuizSessionState = {
+  questions: QuizQuestion[];
+  currentIndex: number;
+  totalInSeries: number;
+  answerState: QuizAnswerState;
+  selectedId: string | null;
+  results: QuizResult[];
+  isSeriesDone: boolean;
+  isLoading: boolean;
+  isGroqLoading: boolean;
+  source: QuizSource;
+  totalItems: number;
+  timeLeft: number;
+  timerProgress: number;
+  lastXpAward: number | null;
+  totalXpAwarded: number;
+  hasStarted: boolean;
+  isPaused: boolean;
+  /** Consecutive correct answers in the current series */
+  combo: number;
+  /** 1 normally, 2 when combo >= 3 */
+  comboMultiplier: number;
+  /** Hard mode: user types the answer instead of choosing */
+  hardMode: boolean;
+  startSession: () => void;
+  pauseSession: () => void;
+  resumeSession: () => void;
+  playAudio: () => void;
+  selectChoice: (id: string) => void;
+  submitTypedAnswer: (text: string) => void;
+  toggleHardMode: () => void;
+  startNewSeries: () => Promise<void>;
+};
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const DEFAULT_SERIES_SIZE = 20;
+const AUTO_ADVANCE_MS = 1100;
+const WRONG_ANSWER_ADVANCE_MS = 4600;
+const QUESTION_TIME_SECONDS = 15;
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j]!, a[i]!];
+  }
+  return a;
+}
+
+function randomType(): QuestionType {
+  const r = Math.random();
+  if (r < 0.38) return 'it_to_fr';
+  if (r < 0.76) return 'fr_to_it';
+  return 'listen_to_fr';
+}
+
+function buildQuestion(item: QuizBankItem, type: QuestionType, pool: QuizBankItem[]): QuizQuestion {
+  const uid = `${item.id}-${type}-${Math.random()}`;
+  const wrong = shuffle(pool.filter((p) => p.id !== item.id)).slice(0, 3);
+  const sm2CardId = item.id.startsWith('sm2-') ? item.id.slice(4) : undefined;
+
+  if (type === 'fr_to_it') {
+    const correct: QuizChoice = { id: item.id, label: item.it };
+    const choices = shuffle([correct, ...wrong.map((w) => ({ id: w.id, label: w.it }))]).filter(
+      (choice) => choice.label.trim().length > 0,
+    );
+    return { uid, type, prompt: item.fr, choices, correctId: item.id, it: item.it, fr: item.fr, phonetic: item.phonetic, category: item.category, sm2CardId };
+  }
+
+  const correct: QuizChoice = { id: item.id, label: item.fr };
+  const choices = shuffle([correct, ...wrong.map((w) => ({ id: w.id, label: w.fr }))]).filter(
+    (choice) => choice.label.trim().length > 0,
+  );
+  return { uid, type, prompt: item.it, choices, correctId: item.id, it: item.it, fr: item.fr, phonetic: item.phonetic, category: item.category, sm2CardId };
+}
+
+function buildSeries(pool: QuizBankItem[], size: number): QuizQuestion[] {
+  if (pool.length < 4) return [];
+  const picked = shuffle(pool).slice(0, size);
+  return picked
+    .map((item) => buildQuestion(item, randomType(), pool))
+    .filter((question) => question.choices.length >= 4);
+}
+
+function detectWeakCategories(results: QuizResult[]): string[] {
+  const catStats: Record<string, { correct: number; total: number }> = {};
+  for (const r of results) {
+    const cat = r.question.category;
+    if (!catStats[cat]) catStats[cat] = { correct: 0, total: 0 };
+    catStats[cat]!.total += 1;
+    if (r.correct) catStats[cat]!.correct += 1;
+  }
+  return Object.entries(catStats)
+    .filter(([, s]) => s.total >= 2 && s.correct / s.total < 0.6)
+    .map(([cat]) => cat);
+}
+
+function normalizeAnswer(text: string): string {
+  return text.toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+// ─── Hook ─────────────────────────────────────────────────────────────────────
+
+export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionState {
+  const seriesSize = options.seriesSize ?? DEFAULT_SERIES_SIZE;
+
+  const [localPool, setLocalPool] = useState<QuizBankItem[]>([]);
+  const [questions, setQuestions] = useState<QuizQuestion[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [answerState, setAnswerState] = useState<QuizAnswerState>('unanswered');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [results, setResults] = useState<QuizResult[]>([]);
+  const [isSeriesDone, setIsSeriesDone] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isGroqLoading, setIsGroqLoading] = useState(false);
+  const [source, setSource] = useState<QuizSource>('local');
+  const [totalItems, setTotalItems] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(QUESTION_TIME_SECONDS);
+  const [lastXpAward, setLastXpAward] = useState<number | null>(null);
+  const [totalXpAwarded, setTotalXpAwarded] = useState(0);
+  const [hasStarted, setHasStarted] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [combo, setCombo] = useState(0);
+  const [hardMode, setHardMode] = useState(false);
+
+  const comboMultiplier = combo >= 3 ? 2 : 1;
+
+  const sessionStart = useRef(Date.now());
+  const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const questionTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const indexRef = useRef(0);
+  const questionsRef = useRef<QuizQuestion[]>([]);
+  const resultsRef = useRef<QuizResult[]>([]);
+  const answeredRef = useRef(false);
+  const comboRef = useRef(0);
+
+  const clearTimer = useCallback(() => {
+    if (advanceTimer.current) {
+      clearTimeout(advanceTimer.current);
+      advanceTimer.current = null;
+    }
+  }, []);
+
+  const clearQuestionTimer = useCallback(() => {
+    if (questionTimer.current) {
+      clearInterval(questionTimer.current);
+      questionTimer.current = null;
+    }
+  }, []);
+
+  const advanceQuestion = useCallback(async () => {
+    const next = indexRef.current + 1;
+    if (next >= questionsRef.current.length) {
+      const dur = Math.floor((Date.now() - sessionStart.current) / 1000);
+      const correct = resultsRef.current.filter((r) => r.correct).length;
+      const total = resultsRef.current.length;
+      const scoreAvg = total > 0 ? Math.round((correct / total) * 100) : 0;
+
+      await insertLearningSession({
+        sessionType: 'quiz',
+        durationSeconds: dur,
+        cardsReviewed: total,
+        scoreAvg,
+      }).catch(() => null);
+
+      const bonusXp = scoreAvg === 100 ? 100 : 50;
+      await addXp(bonusXp).catch(() => null);
+      await unlockAchievement('first_quiz').catch(() => false);
+      if (scoreAvg === 100) await unlockAchievement('perfect_quiz').catch(() => false);
+      setLastXpAward(bonusXp);
+      setTotalXpAwarded((prev) => prev + bonusXp);
+      await successFeedback();
+      setIsSeriesDone(true);
+    } else {
+      indexRef.current = next;
+      setCurrentIndex(next);
+      setAnswerState('unanswered');
+      setSelectedId(null);
+      answeredRef.current = false;
+      setLastXpAward(null);
+      setTimeLeft(QUESTION_TIME_SECONDS);
+      const nextQ = questionsRef.current[next];
+      if (nextQ?.type === 'listen_to_fr') {
+        setTimeout(() => Speech.speak(nextQ.prompt, { language: 'it-IT', rate: 0.82 }), 200);
+      }
+    }
+  }, []);
+
+  const selectChoice = useCallback(
+    (id: string) => {
+      if (!hasStarted || isPaused) return;
+      if (answerState !== 'unanswered' || answeredRef.current) return;
+      const q = questionsRef.current[indexRef.current];
+      if (!q) return;
+
+      const correct = id === q.correctId;
+      answeredRef.current = true;
+      setSelectedId(id);
+      setAnswerState(correct ? 'correct' : 'wrong');
+
+      const result: QuizResult = { correct, question: q, selectedId: id };
+      resultsRef.current = [...resultsRef.current, result];
+      setResults((prev) => [...prev, result]);
+
+      if (q.sm2CardId) {
+        updateCardAfterReview(q.sm2CardId, correct ? 4 : 1).catch(() => null);
+      }
+
+      clearQuestionTimer();
+
+      if (correct) {
+        const nextCombo = comboRef.current + 1;
+        comboRef.current = nextCombo;
+        setCombo(nextCombo);
+        const multiplier = nextCombo >= 3 ? 2 : 1;
+        const xp = 10 * multiplier;
+        setLastXpAward(xp);
+        setTotalXpAwarded((prev) => prev + xp);
+        addXp(xp).catch(() => null);
+        successFeedback();
+      } else if (id === '__timeout__') {
+        comboRef.current = 0;
+        setCombo(0);
+        warningFeedback();
+      } else {
+        comboRef.current = 0;
+        setCombo(0);
+        errorFeedback();
+      }
+
+      if (!correct) {
+        Speech.stop();
+        setTimeout(() => Speech.speak(q.it, { language: 'it-IT', rate: 0.78 }), 300);
+      }
+
+      clearTimer();
+      advanceTimer.current = setTimeout(
+        () => advanceQuestion(),
+        correct ? AUTO_ADVANCE_MS : WRONG_ANSWER_ADVANCE_MS,
+      );
+    },
+    [answerState, advanceQuestion, clearQuestionTimer, clearTimer, hasStarted, isPaused],
+  );
+
+  const submitTypedAnswer = useCallback(
+    (text: string) => {
+      const q = questionsRef.current[indexRef.current];
+      if (!q) return;
+      const normalized = normalizeAnswer(text);
+      const correctChoice = q.choices.find((c) => c.id === q.correctId);
+      const isCorrect = correctChoice ? normalizeAnswer(correctChoice.label) === normalized : false;
+      selectChoice(isCorrect ? q.correctId : '__typed_wrong__');
+    },
+    [selectChoice],
+  );
+
+  const toggleHardMode = useCallback(() => {
+    setHardMode((prev) => !prev);
+  }, []);
+
+  const startNewSeries = useCallback(async (pool: QuizBankItem[], previousResults?: QuizResult[]) => {
+    clearTimer();
+
+    questionsRef.current = [];
+    indexRef.current = 0;
+    resultsRef.current = [];
+    comboRef.current = 0;
+    setCurrentIndex(0);
+    setAnswerState('unanswered');
+    setSelectedId(null);
+    setResults([]);
+    setIsSeriesDone(false);
+    setHasStarted(false);
+    setIsPaused(false);
+    setTimeLeft(QUESTION_TIME_SECONDS);
+    setLastXpAward(null);
+    setTotalXpAwarded(0);
+    setCombo(0);
+    answeredRef.current = false;
+    sessionStart.current = Date.now();
+
+    const localSeries = buildSeries(pool, seriesSize);
+    questionsRef.current = localSeries;
+    setQuestions(localSeries);
+    setSource('local');
+
+    setIsGroqLoading(true);
+    const weakCats = previousResults ? detectWeakCategories(previousResults) : [];
+    const recentScore = previousResults && previousResults.length > 0
+      ? Math.round(previousResults.filter((r) => r.correct).length / previousResults.length * 100)
+      : 70;
+
+    fetchGroqQuizItems({ weakCategories: weakCats, recentScore, count: 30 })
+      .then((groqItems) => {
+        if (!groqItems || groqItems.length < 4) return;
+        const enriched = shuffle([...pool, ...groqItems]);
+        setLocalPool(enriched);
+        setTotalItems(enriched.length);
+        setSource('mixed');
+      })
+      .catch(() => null)
+      .finally(() => setIsGroqLoading(false));
+  }, [clearTimer, seriesSize]);
+
+  const handleNewSeries = useCallback(async () => {
+    await startNewSeries(localPool, resultsRef.current);
+  }, [localPool, startNewSeries]);
+
+  const playAudio = useCallback(() => {
+    if (!hasStarted || isPaused) return;
+    const q = questionsRef.current[indexRef.current];
+    if (!q) return;
+    Speech.stop();
+    Speech.speak(q.it, { language: 'it-IT', rate: 0.82, pitch: 1 });
+  }, [hasStarted, isPaused]);
+
+  const startSession = useCallback(() => {
+    if (questionsRef.current.length === 0) return;
+    setHasStarted(true);
+    setIsPaused(false);
+    sessionStart.current = Date.now();
+    const q = questionsRef.current[indexRef.current];
+    if (q?.type === 'listen_to_fr') {
+      setTimeout(() => Speech.speak(q.prompt, { language: 'it-IT', rate: 0.82 }), 180);
+    }
+  }, []);
+
+  const pauseSession = useCallback(() => {
+    if (!hasStarted || isSeriesDone) return;
+    clearTimer();
+    clearQuestionTimer();
+    setIsPaused(true);
+    Speech.stop();
+  }, [clearQuestionTimer, clearTimer, hasStarted, isSeriesDone]);
+
+  const resumeSession = useCallback(() => {
+    if (!hasStarted || isSeriesDone) return;
+    setIsPaused(false);
+    if (answerState !== 'unanswered' && !advanceTimer.current) {
+      advanceTimer.current = setTimeout(
+        () => advanceQuestion(),
+        answerState === 'wrong' ? WRONG_ANSWER_ADVANCE_MS : AUTO_ADVANCE_MS,
+      );
+    }
+  }, [advanceQuestion, answerState, hasStarted, isSeriesDone]);
+
+  useEffect(() => {
+    (async () => {
+      setIsLoading(true);
+      const [sm2Cards, bankItems] = await Promise.all([getAllCards(), getAllQuizItems()]);
+
+      const sm2Items: QuizBankItem[] = sm2Cards.map((c) => ({
+        id: `sm2-${c.id}`,
+        it: c.frontIt,
+        fr: c.frontFr,
+        phonetic: c.phonetic ?? undefined,
+        category: c.category,
+      }));
+
+      const merged = shuffle([...sm2Items, ...bankItems]);
+      setLocalPool(merged);
+      setTotalItems(merged.length);
+
+      await startNewSeries(merged);
+      setIsLoading(false);
+    })();
+  }, [startNewSeries]);
+
+  useEffect(() => () => {
+    clearTimer();
+    clearQuestionTimer();
+  }, [clearQuestionTimer, clearTimer]);
+
+  useEffect(() => {
+    clearQuestionTimer();
+    if (!hasStarted || isPaused || isLoading || isSeriesDone || answerState !== 'unanswered' || questions.length === 0) return;
+
+    questionTimer.current = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearQuestionTimer();
+          selectChoice('__timeout__');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearQuestionTimer();
+  }, [answerState, clearQuestionTimer, currentIndex, hasStarted, isLoading, isPaused, isSeriesDone, questions.length, selectChoice]);
+
+  return {
+    questions,
+    currentIndex,
+    totalInSeries: questions.length,
+    answerState,
+    selectedId,
+    results,
+    isSeriesDone,
+    isLoading,
+    isGroqLoading,
+    source,
+    totalItems,
+    timeLeft,
+    timerProgress: timeLeft / QUESTION_TIME_SECONDS,
+    lastXpAward,
+    totalXpAwarded,
+    hasStarted,
+    isPaused,
+    combo,
+    comboMultiplier,
+    hardMode,
+    startSession,
+    pauseSession,
+    resumeSession,
+    playAudio,
+    selectChoice,
+    submitTypedAnswer,
+    toggleHardMode,
+    startNewSeries: handleNewSeries,
+  };
+}
