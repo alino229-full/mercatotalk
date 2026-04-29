@@ -1,4 +1,3 @@
-import * as Speech from 'expo-speech';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -10,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useItalianTTS } from '@/hooks/use-italian-tts';
 import { useVoiceRecorder } from '@/hooks/use-voice-recorder';
 import { transcribeLocalAudio } from '@/services/transcription-client';
 import { hasSpeechProxy } from '@/services/speech-ai-client';
@@ -179,15 +179,15 @@ function LessonRow({
   const [correctCount, setCorrectCount] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const [quizScore, setQuizScore] = useState<number | null>(null);
+  const tts = useItalianTTS();
   const isLocked = isProgressReady && (progress?.status ?? 'locked') === 'locked';
   const isCompleted = progress?.status === 'completed';
   const quizQuestions = useMemo(() => buildLessonQuiz(lesson), [lesson]);
   const currentQuestion = quizQuestions[questionIndex];
 
   const speakWord = useCallback((text: string) => {
-    Speech.stop();
-    Speech.speak(text, { language: 'it-IT', rate: 0.8, pitch: 1 });
-  }, []);
+    tts.speak(text, { rate: 0.8, pitch: 1 });
+  }, [tts]);
 
   const startQuiz = useCallback(() => {
     setQuizStarted(true);

@@ -10,6 +10,8 @@ npm-debug.*
 yarn-debug.*
 yarn-error.*
 *.tsbuildinfo
+skills-lock.json
+tsc-out.log
 .env
 .env.*
 !.env.example

@@ -1,4 +1,3 @@
-import * as Speech from 'expo-speech';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
@@ -15,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CircularRing } from '@/components/italpro/circular-ring';
 import { useDailyStats } from '@/hooks/use-daily-learning-plan';
+import { useItalianTTS } from '@/hooks/use-italian-tts';
 import { useDailyPhrase } from '@/hooks/use-daily-phrase';
 import { useXp } from '@/hooks/use-xp';
 import { getDailyXpEarned, getDailySetting, setDailySetting } from '@/database/italpro-local-db';
@@ -44,6 +44,7 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const stats = useDailyStats();
   const xp = useXp();
+  const tts = useItalianTTS();
   const { reload } = stats;
 
   const dailyPhrase = useDailyPhrase();
@@ -75,9 +76,8 @@ export default function HomeScreen() {
 
   const speakPhrase = useCallback(() => {
     if (!dailyPhrase.phrase) return;
-    Speech.stop();
-    Speech.speak(dailyPhrase.phrase.it, { language: 'it-IT', rate: 0.88, pitch: 1 });
-  }, [dailyPhrase.phrase]);
+    tts.speak(dailyPhrase.phrase.it, { rate: 0.88, pitch: 1 });
+  }, [dailyPhrase.phrase, tts]);
 
   const today = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
   const goalPct = Math.min(1, dailyXpEarned / dailyGoal);

@@ -167,7 +167,7 @@ export default function ProgressScreen() {
                 <View style={[styles.progressBarFill, { width: `${masteredPct}%` }]} />
               </View>
               <Text selectable style={styles.cardHint}>
-                {data.masteredCount} mots acquis sur {data.totalCards}. Les cartes difficiles reviennent plus vite.
+                {data.masteredCount} mots acquis sur {data.totalCards} au programme.
               </Text>
               <Pressable
                 accessibilityRole="button"
@@ -269,22 +269,22 @@ function FocusCard({ focusStats }: { focusStats: FocusStatRow[] }) {
       </View>
       {focusStats.length === 0 ? (
         <View style={styles.emptyState}>
-          <Text selectable style={styles.emptyTitle}>Aucune faiblesse détectée</Text>
-          <Text selectable style={styles.emptyText}>{"Termine une simulation d'appel pour générer tes priorités de révision."}</Text>
+          <Text selectable style={styles.emptyTitle}>Tout est sous contrôle pour l&apos;instant</Text>
+          <Text selectable style={styles.emptyText}>Simule un appel pour voir tes axes d&apos;amélioration.</Text>
           <Pressable onPress={() => router.push('/(tabs)/call')} style={({ pressed }) => [styles.secondaryButton, pressed && styles.secondaryButtonPressed]}>
-            <Text style={styles.secondaryButtonText}>Démarrer un appel</Text>
+            <Text style={styles.secondaryButtonText}>Simuler un appel</Text>
           </Pressable>
         </View>
       ) : (
         <>
           {focusStats.map((item) => (
             <View key={item.focus} style={styles.weaknessRow}>
-              <Text selectable style={styles.weaknessCount}>{item.count}x</Text>
+              <Text selectable style={styles.weaknessCount}>{item.count}×</Text>
               <Text selectable style={styles.weaknessText}>{item.focus}</Text>
             </View>
           ))}
           <Pressable onPress={() => router.push('/(tabs)/practice')} style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}>
-            <Text style={styles.primaryButtonText}>Quiz spécial Mes erreurs</Text>
+            <Text style={styles.primaryButtonText}>Travailler mes points faibles</Text>
           </Pressable>
         </>
       )}
@@ -326,11 +326,11 @@ function SessionsCard({ sessions }: { sessions: LearningSessionRow[] }) {
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
-        <Text selectable style={styles.cardLabel}>Sessions récentes</Text>
+        <Text selectable style={styles.cardLabel}>Tes dernières séances</Text>
         <Text selectable style={styles.cardCount}>{sessions.length}</Text>
       </View>
       {sessions.length === 0 ? (
-        <Text selectable style={styles.cardHint}>Aucune session enregistrée pour le moment.</Text>
+        <Text selectable style={styles.cardHint}>Aucune séance pour l&apos;instant.</Text>
       ) : (
         <View style={styles.sessionsList}>
           {sessions.map((session) => <SessionRow key={session.id} session={session} />)}
@@ -363,7 +363,7 @@ function SessionRow({ session }: { session: LearningSessionRow }) {
           <Text selectable style={styles.sessionDate}>{date}</Text>
         </View>
         <View style={styles.sessionBottom}>
-          <Text selectable style={[styles.sessionMeta, { color: C.muted }]}>{session.cardsReviewed} item{session.cardsReviewed > 1 ? 's' : ''} · {mins} min</Text>
+          <Text selectable style={[styles.sessionMeta, { color: C.muted }]}>{session.cardsReviewed} élément{session.cardsReviewed > 1 ? 's' : ''} · {mins} min</Text>
           {session.scoreAvg != null ? <Text selectable style={[styles.sessionScore, { color }]}>{session.scoreAvg}%</Text> : null}
         </View>
       </View>
@@ -375,13 +375,13 @@ function CorrectionsCard({ corrections }: { corrections: CorrectionRow[] }) {
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
-        <Text selectable style={styles.cardLabel}>{"Corrections d'appels"}</Text>
+        <Text selectable style={styles.cardLabel}>Retours sur tes appels</Text>
         <Text selectable style={styles.cardCount}>{corrections.length}</Text>
       </View>
       {corrections.length === 0 ? (
         <View style={styles.emptyState}>
-          <Text selectable style={styles.emptyTitle}>Aucun appel corrigé</Text>
-          <Text selectable style={styles.emptyText}>Lance une simulation pour obtenir score, formulation corrigée et points à travailler.</Text>
+          <Text selectable style={styles.emptyTitle}>Aucun retour pour l&apos;instant</Text>
+          <Text selectable style={styles.emptyText}>Simule un appel pour recevoir un retour personnalisé.</Text>
           <Pressable onPress={() => router.push('/(tabs)/call')} style={({ pressed }) => [styles.secondaryButton, pressed && styles.secondaryButtonPressed]}>
             <Text style={styles.secondaryButtonText}>Simuler un appel</Text>
           </Pressable>

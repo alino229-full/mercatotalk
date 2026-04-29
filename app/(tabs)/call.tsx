@@ -1,5 +1,4 @@
 import { Directory, File, Paths } from 'expo-file-system';
-import * as Speech from 'expo-speech';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Animated, { FadeInDown, FadeInUp, ZoomIn } from 'react-native-reanimated';
 import {
@@ -28,6 +27,7 @@ import {
   type ScenarioRow,
 } from '@/database/italpro-local-db';
 import { useLocalDialogueSession } from '@/hooks/use-local-dialogue-session';
+import { useItalianTTS } from '@/hooks/use-italian-tts';
 import { useVoiceRecorder } from '@/hooks/use-voice-recorder';
 import { successFeedback, tapFeedback } from '@/services/haptics';
 import { hasSpeechProxy } from '@/services/speech-ai-client';
@@ -273,6 +273,7 @@ export default function CallScreen() {
   } = useLocalDialogueSession();
 
   const recorder = useVoiceRecorder();
+  const tts = useItalianTTS();
   const mood = useCallSessionStore((state) => state.mood);
   const setMood = useCallSessionStore((state) => state.setMood);
   const speechReady = hasSpeechProxy();
@@ -323,14 +324,13 @@ export default function CallScreen() {
     setCallStatus('active');
     setXpAwarded(false);
     if (latestClientMessage) {
-      Speech.stop();
-      Speech.speak(latestClientMessage.contentIt, { language: 'it-IT', pitch: 1, rate: 0.86 * clientSpeed });
+      tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed });
     }
-  }, [clientSpeed, latestClientMessage]);
+  }, [clientSpeed, latestClientMessage, tts]);
 
   const endCall = useCallback(async () => {
     setCallStatus('ended');
-    Speech.stop();
+    tts.stop();
 
     if (xpAwarded) return;
 
@@ -348,7 +348,7 @@ export default function CallScreen() {
     if (callCount >= 5) await unlockAchievement('five_calls').catch(() => false);
     await successFeedback();
     setXpAwarded(true);
-  }, [elapsedSeconds, learnerTurns, report.averageScore, xpAwarded]);
+  }, [elapsedSeconds, learnerTurns, report.averageScore, tts, xpAwarded]);
 
   const restartCall = useCallback(async () => {
     await resetActiveConversation();
@@ -382,9 +382,8 @@ export default function CallScreen() {
 
   const speakClient = useCallback(() => {
     if (!latestClientMessage) return;
-    Speech.stop();
-    Speech.speak(latestClientMessage.contentIt, { language: 'it-IT', pitch: 1, rate: 0.86 * clientSpeed });
-  }, [clientSpeed, latestClientMessage]);
+    tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed });
+  }, [clientSpeed, latestClientMessage, tts]);
 
   const revealMessage = useCallback(async (messageId: string) => {
     setRevealedMessageIds((current) => new Set([...current, messageId]));

@@ -1,4 +1,3 @@
-import * as Speech from 'expo-speech';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import {
@@ -36,6 +35,7 @@ import {
   type NumberLookupRow,
   type PhonemeStatRow,
 } from '@/database/italpro-local-db';
+import { speakIt } from '@/services/italian-tts';
 import {
   buildNumberDrill,
   normalizeNumberAnswer,
@@ -66,7 +66,7 @@ const C = {
 } as const;
 
 type B2BTab = 'today' | 'exercises' | 'resources';
-type VocabCategory = 'container' | 'logistique' | 'legal' | 'finance';
+type VocabCategory = 'container' | 'logistique' | 'legal' | 'finance' | 'telephone' | 'temps';
 
 const MODE_LABELS: Record<NumberDrillMode, string> = {
   price: 'Prix',
@@ -76,10 +76,12 @@ const MODE_LABELS: Record<NumberDrillMode, string> = {
 };
 
 const VOCAB_CATEGORIES: { id: VocabCategory; label: string }[] = [
+  { id: 'telephone', label: 'Téléphone' },
+  { id: 'temps', label: 'Dates · Heure' },
+  { id: 'finance', label: 'Finance' },
   { id: 'container', label: 'Container' },
   { id: 'logistique', label: 'Logistique' },
   { id: 'legal', label: 'Légal' },
-  { id: 'finance', label: 'Finance' },
 ];
 
 export default function B2BScreen() {
@@ -101,7 +103,7 @@ export default function B2BScreen() {
   const [replays, setReplays] = useState<CallReplayRow[]>([]);
   const [phonemes, setPhonemes] = useState<PhonemeStatRow[]>([]);
   const [dayInfo, setDayInfo] = useState<DayProgressRow>({ daysActive: 0, daysSinceStart: 0, firstSessionAt: null });
-  const [vocabCategory, setVocabCategory] = useState<VocabCategory>('container');
+  const [vocabCategory, setVocabCategory] = useState<VocabCategory>('telephone');
 
   const listenQuestion = listenActionQuestions[listenQuestionIndex] ?? listenActionQuestions[0]!;
   const currentWarmup = warmupPhrases[warmupIndex % warmupPhrases.length]!;
@@ -136,22 +138,19 @@ export default function B2BScreen() {
     const spoken = readItalianNumber(readerInput, readerMode);
     setReaderOutput(spoken);
     if (!spoken) return;
-    Speech.stop();
-    Speech.speak(spoken, { language: 'it-IT', rate: 0.84 });
+    speakIt(spoken, { rate: 0.84 });
     await logNumberLookup({ inputValue: readerInput, spokenIt: spoken, mode: readerMode }).catch(() => null);
     load();
   }, [load, readerInput, readerMode]);
 
   const playWarmup = useCallback(async () => {
-    Speech.stop();
-    Speech.speak(currentWarmup, { language: 'it-IT', rate: 0.84 });
+    speakIt(currentWarmup, { rate: 0.84 });
     await addXp(5).catch(() => null);
     setWarmupIndex((i) => i + 1);
   }, [currentWarmup]);
 
   const playDrill = useCallback(() => {
-    Speech.stop();
-    Speech.speak(drillItem.spoken, { language: 'it-IT', rate: drillSpeed === 1 ? 0.72 : drillSpeed === 2 ? 0.88 : 1.05 });
+    speakIt(drillItem.spoken, { rate: drillSpeed === 1 ? 0.72 : drillSpeed === 2 ? 0.88 : 1.05 });
   }, [drillItem.spoken, drillSpeed]);
 
   const nextDrill = useCallback(() => {
@@ -159,7 +158,7 @@ export default function B2BScreen() {
     setDrillItem(next);
     setDrillAnswer('');
     setDrillFeedback(null);
-    setTimeout(() => Speech.speak(next.spoken, { language: 'it-IT', rate: drillSpeed === 1 ? 0.72 : drillSpeed === 2 ? 0.88 : 1.05 }), 120);
+    setTimeout(() => speakIt(next.spoken, { rate: drillSpeed === 1 ? 0.72 : drillSpeed === 2 ? 0.88 : 1.05 }), 120);
   }, [drillMode, drillSpeed]);
 
   const submitDrill = useCallback(async () => {
@@ -168,7 +167,7 @@ export default function B2BScreen() {
     const expectedDigits = expected.replace(/[^0-9/]/g, '');
     const actualDigits = actual.replace(/[^0-9/]/g, '');
     const ok = actualDigits.length > 0 && (actual === expected || actualDigits === expectedDigits);
-    setDrillFeedback({ ok, text: ok ? 'Correct, réflexe chiffres validé.' : `À reprendre : attendu ${drillItem.numeric}` });
+    setDrillFeedback({ ok, text: ok ? 'Bravo, c\'est bon !' : `Presque. La bonne réponse : ${drillItem.numeric}` });
     await addXp(ok ? 20 : 5).catch(() => null);
     await insertLearningSession({ sessionType: 'quiz', durationSeconds: 30, cardsReviewed: 1, scoreAvg: ok ? 100 : 40 }).catch(() => null);
     setTimeout(nextDrill, ok ? 1100 : 2400);
@@ -177,8 +176,7 @@ export default function B2BScreen() {
   const playListenQuestion = useCallback((q: ListenActionQuestion) => {
     setListenChoiceId(null);
     setListenPlayed(true);
-    Speech.stop();
-    Speech.speak(q.audioIt, { language: 'it-IT', rate: 0.92 });
+    speakIt(q.audioIt, { rate: 0.92 });
   }, []);
 
   const answerListen = useCallback(async (choiceId: string) => {
@@ -411,14 +409,14 @@ function NumberDrillCard({
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
-        <Text selectable style={styles.cardLabel}>Numbers Drill</Text>
+        <Text selectable style={styles.cardLabel}>Entraînement chiffres</Text>
         <Text selectable style={styles.cardCount}>{MODE_LABELS[drillMode]}</Text>
       </View>
       <Segmented modes={['price', 'dimension', 'date']} selected={drillMode} onSelect={onModeChange} />
       <View style={styles.speedRow}>
         {[1, 2, 3].map((speed) => (
           <Pressable key={speed} onPress={() => onSpeedChange(speed)} style={[styles.speedChip, drillSpeed === speed && styles.speedChipActive]}>
-            <Text style={[styles.speedText, drillSpeed === speed && styles.speedTextActive]}>{speed === 1 ? 'lent' : speed === 2 ? 'natif' : 'rapide'}</Text>
+            <Text style={[styles.speedText, drillSpeed === speed && styles.speedTextActive]}>{speed === 1 ? 'lent' : speed === 2 ? 'moyen' : 'rapide'}</Text>
           </Pressable>
         ))}
       </View>
@@ -427,7 +425,7 @@ function NumberDrillCard({
         <Text style={styles.listenButtonText}>Audio uniquement</Text>
       </Pressable>
       <TextInput
-        accessibilityLabel="Réponse au drill chiffres"
+        accessibilityLabel="Ta réponse"
         keyboardType={drillMode === 'date' ? 'default' : 'numeric'}
         onChangeText={onAnswerChange}
         onSubmitEditing={onSubmit}
@@ -493,8 +491,8 @@ function ListenActionCard({
 function PhonemeCard({ stats, onMark }: { stats: PhonemeStatRow[]; onMark: (phoneme: string, missed: boolean) => void }) {
   return (
     <View style={styles.card}>
-      <Text selectable style={styles.cardLabel}>Prononciation par phonème</Text>
-      <Text selectable style={styles.helpText}>Écoute, répète, puis marque le résultat. Le suivi reste ici, côté B2B.</Text>
+      <Text selectable style={styles.cardLabel}>Travailler ta prononciation</Text>
+      <Text selectable style={styles.helpText}>Écoute, répète, puis indique si c&apos;était bon.</Text>
       {phonemeTargets.map((target) => {
         const stat = stats.find((s) => s.phoneme === target.id);
         const attempts = stat?.attempts ?? 0;
@@ -506,12 +504,12 @@ function PhonemeCard({ stats, onMark }: { stats: PhonemeStatRow[]; onMark: (phon
             <View style={{ flex: 1, gap: 3 }}>
               <View style={styles.phonemeTitleRow}>
                 <Text selectable style={styles.phonemeLabel}>{target.label}</Text>
-                <Text selectable style={[styles.phonemeStat, { color }]}>{missPct === null ? 'jamais essayé' : `${missPct}% ratés · ${attempts} essai${attempts > 1 ? 's' : ''}`}</Text>
+                <Text selectable style={[styles.phonemeStat, { color }]}>{missPct === null ? 'jamais essayé' : `${missPct}% à revoir · ${attempts} essai${attempts > 1 ? 's' : ''}`}</Text>
               </View>
               <Text selectable style={styles.phonemeWords}>{target.examples.join(' · ')}</Text>
             </View>
             <View style={styles.phonemeActions}>
-              <Pressable onPress={() => Speech.speak(target.examples.join(', '), { language: 'it-IT', rate: 0.78 })} style={({ pressed }) => [styles.tinyButton, pressed && styles.pressed]}>
+              <Pressable onPress={() => speakIt(target.examples.join(', '), { rate: 0.78 })} style={({ pressed }) => [styles.tinyButton, pressed && styles.pressed]}>
                 <Text style={styles.tinyButtonText}>🔊</Text>
               </Pressable>
               <Pressable onPress={() => onMark(target.id, false)} style={({ pressed }) => [styles.tinyButton, styles.tinyButtonOk, pressed && styles.pressed]}>
@@ -531,7 +529,7 @@ function PhonemeCard({ stats, onMark }: { stats: PhonemeStatRow[]; onMark: (phon
 function RoadmapCard({ currentDay }: { currentDay: number }) {
   return (
     <View style={styles.card}>
-      <Text selectable style={styles.cardLabel}>Roadmap 120 jours</Text>
+      <Text selectable style={styles.cardLabel}>Ton parcours 120 jours</Text>
       <View style={styles.roadmap}>
         {roadmap120.map((item, index) => {
           const previousDay = index === 0 ? 0 : roadmap120[index - 1]!.day;
@@ -544,7 +542,7 @@ function RoadmapCard({ currentDay }: { currentDay: number }) {
               </View>
               <View style={{ flex: 1, gap: 3 }}>
                 <Text selectable style={styles.milestonePromise}>{item.promise}</Text>
-                <Text selectable style={styles.milestoneGate}>Critère : {item.gate}</Text>
+                <Text selectable style={styles.milestoneGate}>Objectif : {item.gate}</Text>
               </View>
               {reached ? <Text style={styles.milestoneCheck}>✓</Text> : null}
             </View>
@@ -569,7 +567,7 @@ function TechnicalVocabularyCard({ category, onCategoryChange }: { category: Voc
       </View>
       <View style={styles.termGrid}>
         {filtered.map((term) => (
-          <Pressable key={term.id} onPress={() => Speech.speak(term.it, { language: 'it-IT', rate: 0.82 })} style={({ pressed }) => [styles.termChip, pressed && styles.pressed]}>
+          <Pressable key={term.id} onPress={() => speakIt(term.it, { rate: 0.82 })} style={({ pressed }) => [styles.termChip, pressed && styles.pressed]}>
             <Text selectable style={styles.termIt}>{term.it}</Text>
             <Text selectable style={styles.termFr}>{term.fr}</Text>
           </Pressable>
@@ -583,14 +581,14 @@ function NewsCard() {
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
-        <Text selectable style={styles.cardLabel}>Brief B2B italien</Text>
+        <Text selectable style={styles.cardLabel}>L&apos;actu pro italienne</Text>
         <Text selectable style={styles.cardCount}>1 min</Text>
       </View>
       <Text selectable style={styles.newsTitle}>{dailyB2BNews.title}</Text>
       <Text selectable style={styles.newsBody}>{dailyB2BNews.it}</Text>
       <View style={styles.keywordRow}>
         {dailyB2BNews.keywords.map((word) => (
-          <Pressable key={word} onPress={() => Speech.speak(word, { language: 'it-IT' })} style={styles.keyword}>
+          <Pressable key={word} onPress={() => speakIt(word)} style={styles.keyword}>
             <Text style={styles.keywordText}>{word}</Text>
           </Pressable>
         ))}
@@ -607,7 +605,7 @@ function ReplayCard({ replays }: { replays: CallReplayRow[] }) {
         <Text selectable style={styles.cardCount}>{replays.length}</Text>
       </View>
       {replays.length === 0 ? (
-        <Text selectable style={styles.empty}>Aucun replay vocal sauvegardé pour le moment.</Text>
+        <Text selectable style={styles.empty}>Aucun appel enregistré pour l&apos;instant.</Text>
       ) : (
         replays.map((replay) => (
           <View key={replay.id} style={styles.replayRow}>
@@ -623,7 +621,7 @@ function ReplayCard({ replays }: { replays: CallReplayRow[] }) {
 function CultureCard() {
   return (
     <View style={styles.card}>
-      <Text selectable style={styles.cardLabel}>Culture business italienne</Text>
+      <Text selectable style={styles.cardLabel}>Codes pro à l&apos;italienne</Text>
       {cultureCards.map((card) => (
         <View key={card.title} style={styles.cultureItem}>
           <Text selectable style={styles.cultureTitle}>{card.title}</Text>

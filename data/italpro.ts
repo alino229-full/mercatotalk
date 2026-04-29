@@ -34,7 +34,7 @@ export const phases: LearningPhase[] = [
     goal: 'Maitriser les sons specifiques a l\'italien: gli, gn, ci, ge, sc, doubles consonnes.',
     progress: 0,
     accentColor: '#8B5CF6',
-    lessons: ['Mots simples et accents', 'CH / CA / CO / CU', 'CI / CE / GI / GE', 'GH / GL / GN', 'SC / H / S / Z', 'Lettres doubles'],
+    lessons: ['Mots simples et accents', 'CH / CA / CO / CU', 'CI / CE / GI / GE', 'GH / GL / GN', 'SC / H / S / Z', 'Lettres doubles', 'Pièges sonores pour francophones', 'Intonation au téléphone'],
   },
   {
     id: 'phase-gen1',
@@ -88,7 +88,7 @@ export const phases: LearningPhase[] = [
     goal: 'Pronoms formels, auxiliaires, nombres et politesse au telephone commercial.',
     progress: 0.38,
     accentColor: '#22c55e',
-    lessons: ['Pronoms io/tu/Lei', 'Essere et avere', 'Nombres et prix', 'Sons gli, gn, chi'],
+    lessons: ['Pronoms io/tu/Lei', 'Essere et avere', 'Nombres et prix', 'Sons gli, gn, chi', 'Grands nombres et montants', 'Épeler en italien'],
   },
   {
     id: 'phase-2',
@@ -97,7 +97,7 @@ export const phases: LearningPhase[] = [
     goal: 'Construire une conversation B2B complete et gerer les objections.',
     progress: 0.12,
     accentColor: '#38bdf8',
-    lessons: ['Ouverture appel', 'Qualification client', 'Devis et prix', 'Objections courantes'],
+    lessons: ['Ouverture appel', 'Qualification client', 'Devis et prix', 'Objections courantes', 'Pourcentages et remises', 'Dates et délais', "L'heure pendant l'appel", 'Indispensables au téléphone', 'Confirmer et reformuler', 'Quand ça dérape'],
   },
   {
     id: 'phase-tech-b2b',
@@ -151,7 +151,7 @@ export const dailyPractices: PracticeItem[] = [
     id: 'tts-model',
     type: 'audio',
     title: 'Ecouter le modele natif',
-    subtitle: 'TTS local expo-speech, zero cout API.',
+    subtitle: 'Voix neuronale via Worker Cloudflare, fallback local offline.',
     duration: '3 min',
     cost: 'gratuit',
   },
@@ -185,7 +185,7 @@ export const costTiers: CostTier[] = [
   {
     id: 'local-first',
     label: 'Local first',
-    provider: 'expo-speech + SM-2 client',
+    provider: 'Worker TTS + expo-speech fallback + SM-2 client',
     usage: 'Ecoute, flashcards, scoring simple, revision offline.',
     monthlyEstimate: '0 euro',
     priority: 1,

@@ -1,4 +1,3 @@
-import * as Speech from 'expo-speech';
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
 import Animated, { FadeIn, FadeInDown, FadeInUp, ZoomIn } from 'react-native-reanimated';
@@ -16,6 +15,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { QuizQuestion, QuizSessionState } from '@/hooks/use-quiz-session';
+import { useItalianTTS } from '@/hooks/use-italian-tts';
 import { useQuizSession } from '@/hooks/use-quiz-session';
 import { useXp } from '@/hooks/use-xp';
 
@@ -478,10 +478,10 @@ function SeriesResultScreen({ session }: { session: QuizSessionState }) {
 }
 
 function MissedRow({ it, fr }: { it: string; fr: string }) {
+  const tts = useItalianTTS();
   const speak = useCallback(() => {
-    Speech.stop();
-    Speech.speak(it, { language: 'it-IT', rate: 0.82 });
-  }, [it]);
+    tts.speak(it, { rate: 0.82 });
+  }, [it, tts]);
 
   return (
     <Pressable onPress={speak} style={styles.missedRow}>

@@ -1,10 +1,10 @@
-import * as Speech from 'expo-speech';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { getAllQuizItems, type QuizBankItem } from '@/data/quiz-bank';
 import { addXp, getAllCards, insertLearningSession, unlockAchievement, updateCardAfterReview } from '@/database/italpro-local-db';
 import { fetchGroqQuizItems } from '@/services/groq-quiz-client';
 import { errorFeedback, successFeedback, warningFeedback } from '@/services/haptics';
+import { speakIt, stopIt } from '@/services/italian-tts';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -225,7 +225,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
       setTimeLeft(QUESTION_TIME_SECONDS);
       const nextQ = questionsRef.current[next];
       if (nextQ?.type === 'listen_to_fr') {
-        setTimeout(() => Speech.speak(nextQ.prompt, { language: 'it-IT', rate: 0.82 }), 200);
+        setTimeout(() => { void speakIt(nextQ.prompt, { rate: 0.82 }); }, 200);
       }
     }
   }, []);
@@ -273,8 +273,8 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
       }
 
       if (!correct) {
-        Speech.stop();
-        setTimeout(() => Speech.speak(q.it, { language: 'it-IT', rate: 0.78 }), 300);
+        stopIt();
+        setTimeout(() => { void speakIt(q.it, { rate: 0.78 }); }, 300);
       }
 
       clearTimer();
@@ -354,8 +354,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     if (!hasStarted || isPaused) return;
     const q = questionsRef.current[indexRef.current];
     if (!q) return;
-    Speech.stop();
-    Speech.speak(q.it, { language: 'it-IT', rate: 0.82, pitch: 1 });
+    void speakIt(q.it, { rate: 0.82, pitch: 1 });
   }, [hasStarted, isPaused]);
 
   const startSession = useCallback(() => {
@@ -365,7 +364,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     sessionStart.current = Date.now();
     const q = questionsRef.current[indexRef.current];
     if (q?.type === 'listen_to_fr') {
-      setTimeout(() => Speech.speak(q.prompt, { language: 'it-IT', rate: 0.82 }), 180);
+      setTimeout(() => { void speakIt(q.prompt, { rate: 0.82 }); }, 180);
     }
   }, []);
 
@@ -374,7 +373,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     clearTimer();
     clearQuestionTimer();
     setIsPaused(true);
-    Speech.stop();
+    stopIt();
   }, [clearQuestionTimer, clearTimer, hasStarted, isSeriesDone]);
 
   const resumeSession = useCallback(() => {

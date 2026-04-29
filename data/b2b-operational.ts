@@ -18,7 +18,7 @@ export type TechnicalTerm = {
   id: string;
   it: string;
   fr: string;
-  category: 'container' | 'logistique' | 'legal' | 'finance';
+  category: 'container' | 'logistique' | 'legal' | 'finance' | 'telephone' | 'temps';
 };
 
 export type DailyB2BNews = {
@@ -80,6 +80,61 @@ export const listenActionQuestions: ListenActionQuestion[] = [
       { id: 'delivery', label: 'Confirmer une livraison qu\'il n\'a pas demandée' },
     ],
   },
+  {
+    id: 'listen-action-price-confirm',
+    audioIt: 'Mi conferma il totale? Tremilacinquecento euro IVA esclusa, giusto?',
+    answerId: 'confirm',
+    choices: [
+      { id: 'confirm', label: 'Confirmer 3 500 € hors TVA et préciser les conditions de paiement' },
+      { id: 'discount', label: 'Proposer immédiatement une remise non demandée' },
+      { id: 'redo', label: 'Refaire le devis depuis zéro' },
+      { id: 'transfer', label: 'Transférer l\'appel à la comptabilité' },
+    ],
+  },
+  {
+    id: 'listen-action-spell',
+    audioIt: 'Mi scusi, il mio cognome è Lombardi: L come Livorno, O come Otranto, M come Milano.',
+    answerId: 'spell_back',
+    choices: [
+      { id: 'spell_back', label: "Confirmer en répétant l'épellation pour valider" },
+      { id: 'ask_email', label: "Demander seulement l'email" },
+      { id: 'send_quote', label: 'Envoyer le devis sans confirmer le nom' },
+      { id: 'hang_up', label: 'Raccrocher pour gagner du temps' },
+    ],
+  },
+  {
+    id: 'listen-action-deadline',
+    audioIt: 'Mi serve la consegna entro venerdì prossimo, è possibile?',
+    answerId: 'check_logistics',
+    choices: [
+      { id: 'check_logistics', label: 'Confirmer après vérification rapide du planning logistique' },
+      { id: 'promise_yes', label: 'Promettre oui sans vérifier' },
+      { id: 'reject', label: 'Refuser sans explorer la solution' },
+      { id: 'price', label: 'Pivoter aussitôt sur le prix' },
+    ],
+  },
+  {
+    id: 'listen-action-line-cut',
+    audioIt: 'Pronto? Pronto? Mi sente? Credo che la linea sia caduta...',
+    answerId: 'callback',
+    choices: [
+      { id: 'callback', label: "Rappeler immédiatement et s'excuser brièvement" },
+      { id: 'wait', label: 'Attendre que le client rappelle' },
+      { id: 'send_email', label: 'Envoyer un email à la place' },
+      { id: 'ignore', label: 'Considérer l\'appel comme terminé' },
+    ],
+  },
+  {
+    id: 'listen-action-not-now',
+    audioIt: 'Adesso non è il momento giusto. Mi richiami fra due settimane.',
+    answerId: 'reschedule',
+    choices: [
+      { id: 'reschedule', label: 'Noter la date exacte et confirmer le créneau' },
+      { id: 'insist', label: 'Insister pour parler tout de suite' },
+      { id: 'send_quote', label: 'Envoyer le devis sans son accord' },
+      { id: 'goodbye', label: 'Raccrocher sans plan de suivi' },
+    ],
+  },
 ];
 
 export const warmupPhrases = [
@@ -89,6 +144,14 @@ export const warmupPhrases = [
   'La consegna e lo scarico sono indicati separatamente.',
   'Capisco la Sua preoccupazione sul prezzo.',
   'Possiamo fissare una breve chiamata tecnica?',
+  'Le confermo: tremilacinquecento euro IVA esclusa, consegna entro venerdì.',
+  'Mi scusi, può ripetere il numero più lentamente?',
+  'Quindi, se ho capito bene, Le serve per il quindici marzo.',
+  'Le faccio lo spelling: M come Milano, A come Ancona, R come Roma.',
+  'Su questo punto preferisco non improvvisare. Le richiamo entro un\'ora.',
+  'La prossima tappa è la firma del contratto. Le mando l\'email di riepilogo.',
+  'Possiamo applicare uno sconto del cinque per cento sul totale.',
+  'Resto a Sua disposizione per qualsiasi chiarimento.',
 ];
 
 export const roadmap120: RoadmapMilestone[] = [
@@ -104,6 +167,11 @@ export const phonemeTargets = [
   { id: 'sci', label: 'sci/sce', examples: ['scelta', 'scendere', 'lasciare', 'conoscere'] },
   { id: 'double', label: 'doubles consonnes', examples: ['anno', 'offerta', 'fattura', 'allacciamento'] },
   { id: 'r', label: 'r roulé', examples: ['preventivo', 'fornitore', 'scarico', 'garanzia'] },
+  { id: 'z', label: 'z [ts] / [dz]', examples: ['prezzo', 'azienda', 'scadenza', 'pranzo'] },
+  { id: 'ce-ci', label: 'ce / ci [tʃ]', examples: ['certo', 'centesimi', 'cinque', 'ciao'] },
+  { id: 'ge-gi', label: 'ge / gi [dʒ]', examples: ['giorno', 'giugno', 'gentile', 'oggi'] },
+  { id: 'open-e', label: 'è ouvert vs é fermé', examples: ['è', 'caffè', 'perché', 'venerdì'] },
+  { id: 'tonic', label: 'accent tonique', examples: ['telefono', 'numero', 'subito', 'azienda'] },
 ];
 
 export const technicalTerms: TechnicalTerm[] = [
@@ -123,6 +191,28 @@ export const technicalTerms: TechnicalTerm[] = [
   { id: 'fi-02', it: 'fattura pro forma', fr: 'facture pro forma', category: 'finance' },
   { id: 'fi-03', it: 'scadenza pagamento', fr: 'échéance de paiement', category: 'finance' },
   { id: 'fi-04', it: 'acconto', fr: 'acompte', category: 'finance' },
+  { id: 'fi-05', it: 'saldo', fr: 'solde (à payer)', category: 'finance' },
+  { id: 'fi-06', it: 'bonifico bancario', fr: 'virement bancaire', category: 'finance' },
+  { id: 'fi-07', it: 'IVA al 22%', fr: 'TVA à 22 %', category: 'finance' },
+  { id: 'fi-08', it: 'sconto del 5%', fr: 'remise de 5 %', category: 'finance' },
+  { id: 'fi-09', it: 'pagamento a 30 giorni', fr: 'paiement à 30 jours', category: 'finance' },
+  { id: 'fi-10', it: 'fattura elettronica', fr: 'facture électronique (obligatoire en Italie)', category: 'finance' },
+  { id: 'tel-01', it: 'Pronto?', fr: 'Allô ? (uniquement pour décrocher)', category: 'telephone' },
+  { id: 'tel-02', it: 'Mi sente?', fr: "M'entendez-vous ?", category: 'telephone' },
+  { id: 'tel-03', it: 'Resti in linea', fr: 'Restez en ligne', category: 'telephone' },
+  { id: 'tel-04', it: 'Le passo il collega', fr: 'Je vous passe mon collègue', category: 'telephone' },
+  { id: 'tel-05', it: 'È caduta la linea', fr: 'La ligne a coupé', category: 'telephone' },
+  { id: 'tel-06', it: 'Mi può richiamare?', fr: 'Pouvez-vous me rappeler ?', category: 'telephone' },
+  { id: 'tel-07', it: 'Lascio un messaggio', fr: 'Je laisse un message', category: 'telephone' },
+  { id: 'tel-08', it: 'Le faccio lo spelling', fr: 'Je vous épelle', category: 'telephone' },
+  { id: 'tmp-01', it: 'entro venerdì', fr: 'avant vendredi (deadline)', category: 'temps' },
+  { id: 'tmp-02', it: 'fra due settimane', fr: 'dans deux semaines', category: 'temps' },
+  { id: 'tmp-03', it: 'lunedì prossimo', fr: 'lundi prochain', category: 'temps' },
+  { id: 'tmp-04', it: 'in giornata', fr: 'dans la journée', category: 'temps' },
+  { id: 'tmp-05', it: 'a fine mese', fr: 'en fin de mois', category: 'temps' },
+  { id: 'tmp-06', it: 'alle dieci e mezza', fr: 'à 10 h 30', category: 'temps' },
+  { id: 'tmp-07', it: 'alle quindici in punto', fr: 'à 15 h pile (format 24 h)', category: 'temps' },
+  { id: 'tmp-08', it: 'la scadenza dell\'offerta', fr: "la validité de l'offre", category: 'temps' },
 ];
 
 export const dailyB2BNews: DailyB2BNews = {
@@ -147,5 +237,21 @@ export const cultureCards = [
   {
     title: 'Écrit après appel',
     body: 'Un récapitulatif email clair est très apprécié : prix, délai, inclus, exclus, prochaine action.',
+  },
+  {
+    title: 'Format dates et heures',
+    body: 'En italien pro: dates en jour/mois, format 24 h fréquent ("alle quindici"). Seul le 1er du mois est ordinal ("il primo maggio"), les autres sont cardinaux ("il 15 marzo").',
+  },
+  {
+    title: 'Épeler avec les villes',
+    body: "Pour confirmer un nom au téléphone, les Italiens utilisent l'alphabet des villes: A come Ancona, B come Bologna, M come Milano. Indispensable pour emails, codes client et références devis.",
+  },
+  {
+    title: 'Prononcer les chiffres',
+    body: "À l'oral, un grand nombre se découpe pour la clarté: 3 547 = «tre mila... cinque cento... quaranta sette». Toujours répéter le total à la fin: «Le ripeto: tremilacinquecento euro IVA esclusa».",
+  },
+  {
+    title: 'Conclure un appel',
+    body: "Ne raccrochez jamais sans avoir nommé la prochaine étape: \"La prossima tappa è...\" + email récapitulatif sous 1 h. C'est attendu en B2B italien.",
   },
 ];
