@@ -21,6 +21,8 @@ const MAPPING = {
   'book.fill': 'menu-book',
   waveform: 'graphic-eq',
   'phone.fill': 'phone',
+  'phone.down.fill': 'call-end',
+  'arrow.counterclockwise': 'restart-alt',
   'chart.bar.fill': 'bar-chart',
   'play.fill': 'play-arrow',
   'checkmark.circle.fill': 'check-circle',

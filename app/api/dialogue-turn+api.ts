@@ -1,5 +1,6 @@
 import type { DialogueMessageRow, ScenarioRow } from '@/database/italpro-local-db';
 import type { B2BMood } from '@/data/b2b-operational';
+import type { GuidedChoiceQuality } from '@/services/local-dialogue-engine';
 import type { DialogueAiTurn } from '@/services/dialogue-ai-client';
 
 type DialogueTurnRequest = {
@@ -7,6 +8,7 @@ type DialogueTurnRequest = {
   learnerReply?: string;
   history?: DialogueMessageRow[];
   mood?: B2BMood;
+  guidedChoiceQuality?: GuidedChoiceQuality;
 };
 
 type GroqChatResponse = {
@@ -59,7 +61,13 @@ export async function POST(request: Request) {
           },
           {
             role: 'user',
-            content: buildPrompt(body.scenario, body.learnerReply, body.history, body.mood),
+            content: buildPrompt(
+              body.scenario,
+              body.learnerReply,
+              body.history,
+              body.mood,
+              body.guidedChoiceQuality,
+            ),
           },
         ],
       }),
@@ -95,6 +103,7 @@ function buildPrompt(
   learnerReply: string,
   history: DialogueMessageRow[],
   mood?: B2BMood,
+  guidedChoiceQuality?: GuidedChoiceQuality,
 ): string {
   const compactHistory = history.slice(-8).map((message) => ({
     role: message.role,
@@ -121,6 +130,7 @@ function buildPrompt(
     },
     history: compactHistory,
     learnerReply,
+    guidedChoiceQuality,
     expectedJsonShape: {
       correction: {
         score: 'number 0-100',
@@ -139,6 +149,19 @@ function buildPrompt(
         coachingNote: 'objectif pedagogique du prochain tour en francais',
       },
     },
+    guidedChoiceRule:
+      guidedChoiceQuality === 'wrong'
+        ? 'La reponse apprenant vient d un piege hors sujet: le client doit reagir naturellement, pointer que cela ne repond pas, puis reformuler sa demande.'
+        : guidedChoiceQuality === 'approx'
+          ? 'La reponse apprenant est presque correcte mais trop vague: le client doit demander une preuve ou une precision.'
+          : guidedChoiceQuality === 'best'
+            ? 'La reponse apprenant est la meilleure option guidee: le client doit avancer vers l etape suivante, sans repeter la meme question.'
+            : 'La reponse apprenant est libre: evalue-la normalement.',
+    conversationRules: [
+      'Ne repete jamais mot pour mot une question client deja posee dans history.',
+      'Si l apprenant a apporte des preuves de fiabilite (SIRET, references, inspection, contrat, paiement securise), passe a une nouvelle objection ou a la prochaine etape.',
+      'Apres 6 tours apprenant ou si le closing est atteint, le client peut terminer la conversation en demandant un recapitulatif ecrit.',
+    ],
   });
 }
 

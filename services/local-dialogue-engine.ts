@@ -20,11 +20,14 @@ export type LocalClientReply = {
   coachingNote: string;
 };
 
+export type GuidedChoiceQuality = 'best' | 'approx' | 'wrong';
+
 // ─── Markers ─────────────────────────────────────────────────────────────────
 
 const politeMarkers = ['lei', 'le', 'la', 'vorrebbe', 'posso', 'possiamo', 'desidera'];
 const reassuranceMarkers = [
   'garanzia', 'certificato', 'isolamento', 'sicuro', 'affidabile', 'assistenza', 'collaudo',
+  'referenze', 'siret', 'ispezione', 'contratto', 'pagamento sicuro',
 ];
 const qualificationMarkers = [
   'dove', 'quando', 'budget', 'uso', 'terreno', 'permesso', 'quante', 'necessita',
@@ -57,6 +60,22 @@ function countMatches(text: string, patterns: RegExp[]): number {
 function capitalizeSentence(value: string): string {
   const trimmed = value.trim();
   return trimmed ? `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}` : trimmed;
+}
+
+function hasClientAsked(history: DialogueMessageRow[], pattern: RegExp): boolean {
+  return history.some((message) => message.role === 'client' && pattern.test(message.contentIt.toLowerCase()));
+}
+
+function hasLearnerAddressedTrust(text: string): boolean {
+  return /garanzi|referenz|siret|ispezion|contratt|pagamento\s+sicuro|affidabil|certificat/i.test(text);
+}
+
+function hasLearnerClosingIntent(text: string): boolean {
+  return /contratto|preventivo definitivo|email|indirizzo email|procediamo|firma|richiam|appuntamento|riepilogo/i.test(text);
+}
+
+function hasLearnerAddressedComfort(text: string): boolean {
+  return /isolament|isolat|ventilat|collaud|material|caldo|inverno|foto real|scheda tecnica/i.test(text);
 }
 
 // ─── Granular Correction Engine ───────────────────────────────────────────────
@@ -147,10 +166,42 @@ export function buildLocalClientReply(params: {
   learnerReply: string;
   history: DialogueMessageRow[];
   mood?: B2BMood;
+  guidedChoiceQuality?: GuidedChoiceQuality;
 }): LocalClientReply {
   const turn = params.history.filter((message) => message.role === 'learner').length;
   const normalized = params.learnerReply.toLowerCase();
   const mood = params.mood ?? 'professionnel';
+  const trustAlreadyAsked = hasClientAsked(params.history, /come faccio a sapere|affidabili|fidarmi|garanzie|referenze/);
+
+  if (params.guidedChoiceQuality === 'wrong') {
+    return {
+      contentIt:
+        'Mi scusi, ma non risponde alla mia domanda. Le ho chiesto una cosa precisa: può darmi una risposta concreta, senza cambiare argomento?',
+      contentFr:
+        'Excusez-moi, mais cela ne répond pas à ma question. Je vous ai demandé quelque chose de précis : pouvez-vous me donner une réponse concrète sans changer de sujet ?',
+      coachingNote: 'La réponse choisie était hors sujet. Reviens à la question exacte du client et réponds en une phrase claire.',
+    };
+  }
+
+  if (params.guidedChoiceQuality === 'approx') {
+    return {
+      contentIt:
+        'Va bene, ma è ancora un po\' generico. Mi può dare un esempio concreto o una prova verificabile?',
+      contentFr:
+        'D\'accord, mais cela reste un peu général. Pouvez-vous me donner un exemple concret ou une preuve vérifiable ?',
+      coachingNote: 'Une approximation garde le dialogue ouvert, mais le client demande maintenant une preuve précise.',
+    };
+  }
+
+  if (turn >= 6 || hasLearnerClosingIntent(normalized)) {
+    return {
+      contentIt:
+        'Perfetto, mi sembra chiaro. Mi mandi pure un riepilogo scritto con prezzo, tempi e condizioni. Poi decidiamo come procedere.',
+      contentFr:
+        'Parfait, cela me semble clair. Envoyez-moi un récapitulatif écrit avec prix, délais et conditions. Ensuite nous déciderons comment avancer.',
+      coachingNote: 'Le client accepte de terminer l\'échange. Conclus avec un email récapitulatif et une prochaine étape datée.',
+    };
+  }
 
   if (mood === 'presse' && turn <= 2) {
     return {
@@ -168,11 +219,21 @@ export function buildLocalClientReply(params: {
     };
   }
 
-  if (mood === 'mefiant' && !normalized.includes('garanzia') && !normalized.includes('certific')) {
+  if (mood === 'mefiant' && !trustAlreadyAsked && !hasLearnerAddressedTrust(normalized)) {
     return {
       contentIt: 'Prima di parlare di ordine, come faccio a sapere che siete affidabili?',
       contentFr: 'Avant de parler commande, comment savoir que vous etes fiables ?',
       coachingNote: 'Apporte des garanties : reference, inspection, contrat, paiement securise.',
+    };
+  }
+
+  if (hasLearnerAddressedComfort(normalized) && hasLearnerAddressedTrust(normalized)) {
+    return {
+      contentIt:
+        'Questo mi rassicura. Mi mandi allora foto reali, scheda tecnica dell\'isolamento e qualche referenza cliente. Dopo possiamo parlare di prezzo e tempi.',
+      contentFr:
+        'Cela me rassure. Envoyez-moi donc des photos réelles, la fiche technique de l\'isolation et quelques références client. Ensuite nous pourrons parler prix et délais.',
+      coachingNote: 'Le client valide la preuve. Prépare une transition vers prix, délais et prochaine étape.',
     };
   }
 
@@ -196,7 +257,7 @@ export function buildLocalClientReply(params: {
     };
   }
 
-  if (normalized.includes('isolamento') || normalized.includes('garanzia') || normalized.includes('certific')) {
+  if (normalized.includes('isolamento') || hasLearnerAddressedTrust(normalized)) {
     return {
       contentIt:
         'Questo mi rassicura. E per i permessi? Se voglio metterlo su un terreno privato, mi accompagnate nelle verifiche?',

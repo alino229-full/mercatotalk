@@ -16,7 +16,7 @@ import {
   type ScenarioRow,
 } from '@/database/italpro-local-db';
 import { requestDialogueAiTurn } from '@/services/dialogue-ai-client';
-import { buildLocalClientReply, buildLocalCorrection } from '@/services/local-dialogue-engine';
+import { buildLocalClientReply, buildLocalCorrection, type GuidedChoiceQuality } from '@/services/local-dialogue-engine';
 import { useCallSessionStore } from '@/stores/call-session-store';
 
 export type LocalDialogueSession = {
@@ -30,7 +30,7 @@ export type LocalDialogueSession = {
   error: string | null;
   activeScenarioId: string;
   setActiveScenarioId: (scenarioId: string) => void;
-  sendLearnerReply: (reply: string) => Promise<void>;
+  sendLearnerReply: (reply: string, guidedChoiceQuality?: GuidedChoiceQuality) => Promise<void>;
   resetActiveConversation: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -85,7 +85,7 @@ export function useLocalDialogueSession(): LocalDialogueSession {
   }, [refresh]);
 
   const sendLearnerReply = useCallback(
-    async (reply: string) => {
+    async (reply: string, guidedChoiceQuality?: GuidedChoiceQuality) => {
       const cleanReply = reply.trim();
 
       if (!activeScenario || cleanReply.length === 0 || isSending) {
@@ -103,11 +103,14 @@ export function useLocalDialogueSession(): LocalDialogueSession {
           contentIt: cleanReply,
           contentFr: 'Reponse apprenant a corriger.',
         });
+        // Show learner message immediately, don't wait for AI reply
+        setMessages(await getMessages(activeScenario.id));
         const remoteTurn = await requestDialogueAiTurn({
           scenario: activeScenario,
           learnerReply: cleanReply,
           history: currentMessages,
           mood,
+          guidedChoiceQuality,
         }).catch(() => null);
         const correction = remoteTurn?.correction ?? buildLocalCorrection(cleanReply);
         const correctionRow = await insertCorrection({
@@ -126,6 +129,7 @@ export function useLocalDialogueSession(): LocalDialogueSession {
             learnerReply: cleanReply,
             history: currentMessages,
             mood,
+            guidedChoiceQuality,
           });
         await insertMessage({
           scenarioId: activeScenario.id,

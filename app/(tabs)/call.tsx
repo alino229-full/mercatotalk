@@ -1,4 +1,3 @@
-import { Directory, File, Paths } from 'expo-file-system';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Animated, { FadeInDown, FadeInUp, ZoomIn } from 'react-native-reanimated';
 import {
@@ -30,6 +29,8 @@ import { useLocalDialogueSession } from '@/hooks/use-local-dialogue-session';
 import { useItalianTTS } from '@/hooks/use-italian-tts';
 import { useVoiceRecorder } from '@/hooks/use-voice-recorder';
 import { successFeedback, tapFeedback } from '@/services/haptics';
+import { requestGuidedReplyChoices, type GuidedReplyChoice } from '@/services/guided-choices-ai-client';
+import type { GuidedChoiceQuality } from '@/services/local-dialogue-engine';
 import { hasSpeechProxy } from '@/services/speech-ai-client';
 import { transcribeLocalAudio } from '@/services/transcription-client';
 import { useCallSessionStore } from '@/stores/call-session-store';
@@ -87,6 +88,16 @@ const HINT_SETS: Record<string, HintSet> = {
     best: 'I nostri container sono certificati IICL e forniti con rapporto di ispezione fotografico. Posso inviarLe la documentazione tecnica?',
     approx: 'La qualità è garantita. Tutti i container vengono ispezionati prima della consegna.',
     wrong: ['Il prezzo include il trasporto fino a 200 km.', 'La consegna avviene entro 48 ore in tutta Italia.'],
+  },
+  comfort_trust: {
+    best: 'Capisco il Suo dubbio. I moduli da 20 piedi sono isolati, ventilati e collaudati prima della consegna. Posso inviarLe foto reali, scheda tecnica e referenze clienti?',
+    approx: 'Sì, possono essere comodi e affidabili se sono ben isolati e controllati. Le mando la documentazione tecnica.',
+    wrong: ['Il pagamento si effettua con acconto del 30% e saldo alla consegna.', 'Il container da 40 piedi costa di più ma offre più spazio interno.'],
+  },
+  winter_comfort: {
+    best: 'Sì, resta caldo se l’isolamento è dimensionato correttamente. Le mando la scheda tecnica dei materiali, foto di moduli già installati e, se vuole, organizziamo una visita o videochiamata.',
+    approx: 'Sì, con un buon isolamento il container può restare confortevole anche in inverno. Le invio qualche foto reale.',
+    wrong: ['Possiamo consegnarlo in 48 ore se il trasportatore è disponibile.', 'Il colore RAL può essere verde, grigio o bianco secondo il Suo gusto.'],
   },
   availability: {
     best: 'Sì, abbiamo unità disponibili in stock. Quale dimensione cerca — 20 o 40 piedi — e per quale utilizzo?',
@@ -174,7 +185,9 @@ function classifyClientMessage(contentIt: string, contentFr: string): string {
 
   if (/chi (è|sei|parla)|non (la|ti) conosco|chi siete|che azienda/.test(t)) return 'identification';
   if (/pronto\?|chi è\?|cosa vuole|non (la|ti) (conosco|conosc)/.test(t)) return 'cold_open';
-  if (/truffat|arnaque|truffe|garanzie serie|fidarsi|sicuro che non|come faccio a sapere/.test(t)) return 'trust';
+  if (/(inverno|freddo|caldo|resta caldo|riscald|bello solo in foto|sembra bello solo in foto|hiver|chaud|froid)/.test(t)) return 'winter_comfort';
+  if (/(comod|confort|confortable|comfortable).*(affidabil|fiable|fiducia|garanzi)|(?:affidabil|fiable|fiducia|garanzi).*(comod|confort|confortable|comfortable)/.test(t)) return 'comfort_trust';
+  if (/truffat|arnaque|truffe|garanzie serie|fidarsi|sicuro che non|come faccio a sapere|affidabil|fiable/.test(t)) return 'trust';
   if (/(quanto|costo|prezzo|budget|spend|cher|prix|coût|euro|cost)/.test(t)) {
     if (/(trop.*cher|troppo.*car|non posso|eccede|non ho|beyond|dépasse)/.test(t)) return 'objection_price';
     return 'price';
@@ -192,8 +205,13 @@ function classifyClientMessage(contentIt: string, contentFr: string): string {
   return 'generic';
 }
 
-function buildHintOptions(set: HintSet): string[] {
-  const options = [set.best, set.approx, ...set.wrong];
+function buildHintOptions(set: HintSet, type: string): GuidedReplyChoice[] {
+  const options: GuidedReplyChoice[] = [
+    { id: `${type}-best`, text: set.best, quality: 'best' },
+    { id: `${type}-approx`, text: set.approx, quality: 'approx' },
+    { id: `${type}-wrong-1`, text: set.wrong[0], quality: 'wrong' },
+    { id: `${type}-wrong-2`, text: set.wrong[1], quality: 'wrong' },
+  ];
   // Fisher-Yates shuffle (stable per render via useMemo dependency)
   for (let i = options.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -207,13 +225,14 @@ function buildHintOptions(set: HintSet): string[] {
 function getContextualHints(
   latestClientMsg: { contentIt: string; contentFr: string } | undefined,
   phaseIndex: number,
-): string[] {
+): GuidedReplyChoice[] {
   if (!latestClientMsg) {
-    return buildHintOptions(PHASE_INTRO_HINTS[CALL_PHASES[phaseIndex]]);
+    const phase = CALL_PHASES[phaseIndex];
+    return buildHintOptions(PHASE_INTRO_HINTS[phase], `phase-${phase}`);
   }
   const type = classifyClientMessage(latestClientMsg.contentIt, latestClientMsg.contentFr);
   const set = HINT_SETS[type] ?? HINT_SETS['generic']!;
-  return buildHintOptions(set);
+  return buildHintOptions(set, type);
 }
 
 const SCENARIO_DIFFICULTY: Record<string, 'Facile' | 'Moyen' | 'Difficile'> = {
@@ -251,12 +270,16 @@ export default function CallScreen() {
   const [immersionMode, setImmersionMode] = useState(false);
   const [clientSpeed, setClientSpeed] = useState<ClientSpeed>(1);
   const [revealedMessageIds, setRevealedMessageIds] = useState<Set<string>>(new Set());
+  const [selectedGuidedHint, setSelectedGuidedHint] = useState<GuidedReplyChoice | null>(null);
+  const [aiGuidedHints, setAiGuidedHints] = useState<GuidedReplyChoice[] | null>(null);
+  const [isLoadingGuidedHints, setIsLoadingGuidedHints] = useState(false);
   const [cheatDraft, setCheatDraft] = useState('');
   const [cheatIt, setCheatIt] = useState('');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [xpAwarded, setXpAwarded] = useState(false);
   const recordingStartedAt = useRef<number | null>(null);
   const callStartedAt = useRef<number | null>(null);
+  const lastSpokenClientMessageId = useRef<string | null>(null);
 
   const {
     scenarios,
@@ -289,6 +312,43 @@ export default function CallScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [latestClientMessage?.id, phaseIndex],
   );
+  const guidedHints = aiGuidedHints ?? contextualHints;
+  const isUsingAiGuidedHints = aiGuidedHints !== null;
+
+  useEffect(() => {
+    if (!activeScenario || !latestClientMessage) {
+      setAiGuidedHints(null);
+      setIsLoadingGuidedHints(false);
+      return;
+    }
+
+    let cancelled = false;
+    setAiGuidedHints(null);
+    setIsLoadingGuidedHints(true);
+
+    requestGuidedReplyChoices({
+      scenario: activeScenario,
+      latestClientMessage,
+      history: messages,
+      mood,
+    })
+      .then((choices) => {
+        if (!cancelled) setAiGuidedHints(choices);
+      })
+      .catch(() => {
+        if (!cancelled) setAiGuidedHints(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingGuidedHints(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // A new guided generation is needed only when the visible client turn changes.
+    // Including every messages update would regenerate choices while the learner reply is still being sent.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeScenario?.id, latestClientMessage?.id, mood]);
 
   useEffect(() => {
     if (recorder.state !== 'recording') {
@@ -304,6 +364,18 @@ export default function CallScreen() {
 
     return () => clearInterval(intervalId);
   }, [recorder.state]);
+
+  useEffect(() => {
+    if (callStatus !== 'active' || !latestClientMessage) return;
+    if (lastSpokenClientMessageId.current === latestClientMessage.id) return;
+
+    const timeoutId = setTimeout(() => {
+      lastSpokenClientMessageId.current = latestClientMessage.id;
+      tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed });
+    }, 1200);
+
+    return () => clearTimeout(timeoutId);
+  }, [callStatus, clientSpeed, latestClientMessage, tts]);
 
   useEffect(() => {
     if (callStatus !== 'active') return;
@@ -324,6 +396,7 @@ export default function CallScreen() {
     setCallStatus('active');
     setXpAwarded(false);
     if (latestClientMessage) {
+      lastSpokenClientMessageId.current = latestClientMessage.id;
       tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed });
     }
   }, [clientSpeed, latestClientMessage, tts]);
@@ -355,9 +428,12 @@ export default function CallScreen() {
     callStartedAt.current = null;
     setElapsedSeconds(0);
     setDraft('');
+    setSelectedGuidedHint(null);
+    setAiGuidedHints(null);
     setCallStatus('ringing');
     setXpAwarded(false);
     setRevealedMessageIds(new Set());
+    lastSpokenClientMessageId.current = null;
   }, [resetActiveConversation]);
 
   const handleScenarioChange = useCallback(
@@ -366,9 +442,12 @@ export default function CallScreen() {
       callStartedAt.current = null;
       setElapsedSeconds(0);
       setDraft('');
+      setSelectedGuidedHint(null);
+      setAiGuidedHints(null);
       setCallStatus('ringing');
       setXpAwarded(false);
       setRevealedMessageIds(new Set());
+      lastSpokenClientMessageId.current = null;
     },
     [setActiveScenarioId],
   );
@@ -376,9 +455,11 @@ export default function CallScreen() {
   const handleSend = useCallback(async () => {
     const clean = draft.trim();
     if (!clean) return;
+    const guidedQuality = selectedGuidedHint && clean === selectedGuidedHint.text ? selectedGuidedHint.quality : undefined;
     setDraft('');
-    await sendLearnerReply(clean);
-  }, [draft, sendLearnerReply]);
+    setSelectedGuidedHint(null);
+    await sendLearnerReply(clean, guidedQuality);
+  }, [draft, selectedGuidedHint, sendLearnerReply]);
 
   const speakClient = useCallback(() => {
     if (!latestClientMessage) return;
@@ -402,7 +483,8 @@ export default function CallScreen() {
     setCheatIt(translated);
   }, [cheatDraft]);
 
-  const insertHint = useCallback((hint: string) => {
+  const insertHint = useCallback((hint: string, quality?: GuidedChoiceQuality, id?: string) => {
+    setSelectedGuidedHint(quality ? { id: id ?? hint, text: hint, quality } : null);
     setDraft((current) => {
       const clean = current.trim();
       return clean.length > 0 ? `${clean} ${hint}` : hint;
@@ -476,27 +558,20 @@ export default function CallScreen() {
 
       {/* ── Fixed header ────────────────────────────────────────────────────── */}
       <View style={[styles.fixedHeader, { paddingTop: insets.top + 12 }]}>
-        <Text style={styles.kicker}>Simulation commerciale</Text>
-        <Text style={styles.title}>Appel client italien</Text>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={styles.kicker}>Simulation commerciale</Text>
+          {activeScenario ? (
+            <Text style={styles.title} numberOfLines={1}>{activeScenario.title}</Text>
+          ) : (
+            <Text style={styles.title}>Appel client italien</Text>
+          )}
+        </View>
       </View>
 
       <ScrollView
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scroll}>
-
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.scenarioRail}>
-          {scenarios.map((scenario) => (
-            <ScenarioCard
-              key={scenario.id}
-              scenario={scenario}
-              selected={scenario.id === activeScenarioId}
-              onPress={() => handleScenarioChange(scenario.id)}
-            />
-          ))}
-        </ScrollView>
-
-        {activeScenario ? <MissionCard scenario={activeScenario} /> : null}
 
         <MoodControl mood={mood} onChange={setMood} />
 
@@ -523,6 +598,7 @@ export default function CallScreen() {
               onChangeImmersion={setImmersionMode}
               onChangeClientSpeed={setClientSpeed}
               onEndCall={endCall}
+              onRestartCall={restartCall}
               onSpeakClient={speakClient}
               onRevealMessage={revealMessage}
             />
@@ -544,17 +620,21 @@ export default function CallScreen() {
                   <Text selectable style={styles.hintsPhaseLabel}>{CALL_PHASES[phaseIndex]}</Text>
                 </View>
                 <Text selectable style={styles.hintsSubLabel}>
-                  1 bonne réponse · 1 approximation · 2 pièges
+                  {isLoadingGuidedHints
+                    ? 'L’IA prépare 4 réponses cohérentes…'
+                    : isUsingAiGuidedHints
+                      ? 'IA · 1 bonne réponse · 1 approximation · 2 pièges'
+                      : 'Secours local · 1 bonne réponse · 1 approximation · 2 pièges'}
                 </Text>
                 <View style={styles.hintsList}>
-                  {contextualHints.map((hint) => (
+                  {guidedHints.map((hint) => (
                     <Pressable
-                      key={hint}
+                      key={hint.id}
                       accessibilityRole="button"
                       accessibilityLabel="Utiliser cette réponse"
-                      onPress={() => insertHint(hint)}
+                      onPress={() => insertHint(hint.text, hint.quality, hint.id)}
                       style={({ pressed }) => [styles.hintChip, pressed && styles.hintChipPressed]}>
-                      <Text selectable style={styles.hintText}>{hint}</Text>
+                      <Text selectable style={styles.hintText}>{hint.text}</Text>
                     </Pressable>
                   ))}
                 </View>
@@ -567,7 +647,10 @@ export default function CallScreen() {
               isRecording={recorder.state === 'recording'}
               isProcessing={recorder.state === 'processing' || isTranscribing}
               recordingSeconds={recordingSeconds}
-              onDraftChange={setDraft}
+              onDraftChange={(value) => {
+                setSelectedGuidedHint(null);
+                setDraft(value);
+              }}
               onSend={handleSend}
               onVoicePress={handleVoicePress}
             />
@@ -713,6 +796,7 @@ function CallPanel({
   onChangeImmersion,
   onChangeClientSpeed,
   onEndCall,
+  onRestartCall,
   onSpeakClient,
   onRevealMessage,
 }: {
@@ -727,6 +811,7 @@ function CallPanel({
   onChangeImmersion: (value: boolean) => void;
   onChangeClientSpeed: (value: ClientSpeed) => void;
   onEndCall: () => void;
+  onRestartCall: () => void;
   onSpeakClient: () => void;
   onRevealMessage: (messageId: string) => void;
 }) {
@@ -740,6 +825,9 @@ function CallPanel({
         <View style={styles.callActions}>
           <Pressable accessibilityRole="button" accessibilityLabel="Écouter le client" onPress={onSpeakClient} style={styles.iconButton}>
             <IconSymbol name="play.fill" color={C.primaryDark} size={18} />
+          </Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Réinitialiser cette simulation" onPress={onRestartCall} style={styles.iconButton}>
+            <IconSymbol name="arrow.counterclockwise" color={C.orange} size={18} />
           </Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Terminer l'appel" onPress={onEndCall} style={styles.endButton}>
             <IconSymbol name="phone.down.fill" color="#FFFFFF" size={18} />
@@ -856,9 +944,14 @@ function MessageBubble({
       entering={FadeInDown.delay(index * 35).duration(300)}
       accessibilityLabel={`${message.role}: ${message.contentIt}`}
       style={[styles.messageBubble, isLearner ? styles.messageLearner : isCoach ? styles.messageCoach : styles.messageClient]}>
+      {isLearner ? (
+        <Text style={styles.messageRoleLabel}>Vous</Text>
+      ) : message.role === 'client' ? (
+        <Text style={styles.messageRoleLabelClient}>Client</Text>
+      ) : null}
       <View style={styles.messageTop}>
         <Text selectable={!hiddenClientText} style={[styles.messageIt, isLearner && styles.messageLearnerText, hiddenClientText && styles.messageHiddenText]}>
-          {hiddenClientText ? 'Audio uniquement - texte masque' : message.contentIt}
+          {hiddenClientText ? 'Audio uniquement - texte masqué' : message.contentIt}
         </Text>
         {isLearner && message.coachingNote ? <Text style={styles.warnMark}>⚠</Text> : null}
       </View>
@@ -867,7 +960,7 @@ function MessageBubble({
           <Text style={styles.revealText}>Révéler le texte (-5 XP)</Text>
         </Pressable>
       ) : message.contentFr && !isLearner ? (
-        <Text selectable style={styles.messageFr}>{message.contentFr}</Text>
+        <Text selectable style={[styles.messageFr, isLearner && styles.messageFrLearner]}>{message.contentFr}</Text>
       ) : null}
       {message.coachingNote ? <Text selectable style={styles.messageCoachNote}>Coach: {message.coachingNote}</Text> : null}
     </Animated.View>
@@ -1046,6 +1139,9 @@ function formatDuration(totalSeconds: number): string {
 }
 
 async function persistReplayAudio(uri: string): Promise<string> {
+  if (process.env.EXPO_OS === 'web') return uri;
+
+  const { Directory, File, Paths } = await import('expo-file-system');
   const dir = new Directory(Paths.document, 'italpro-call-replays');
   if (!dir.exists) {
     dir.create({ intermediates: true, idempotent: true });
@@ -1066,7 +1162,7 @@ const styles = StyleSheet.create({
     borderBottomColor: C.border,
     gap: 2,
   },
-  scroll: { padding: 20, paddingBottom: 36, gap: 14 },
+  scroll: { padding: 16, paddingBottom: 36, gap: 12 },
   kicker: { color: C.primary, fontSize: 12, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.7 },
   title: { color: C.text, fontSize: 28, fontWeight: '900' },
   subtitle: { color: C.muted, fontSize: 13, lineHeight: 18 },
@@ -1139,14 +1235,17 @@ const styles = StyleSheet.create({
   phaseLabelActive: { color: C.primaryDark },
   loadingBox: { minHeight: 250, alignItems: 'center', justifyContent: 'center', gap: 10 },
   loadingText: { color: C.muted, fontSize: 13, fontWeight: '800' },
-  messagesList: { gap: 10 },
-  messageBubble: { maxWidth: '88%', borderRadius: 21, paddingHorizontal: 14, paddingVertical: 11, gap: 5 },
+  messagesList: { gap: 14 },
+  messageBubble: { maxWidth: '85%', borderRadius: 21, paddingHorizontal: 14, paddingVertical: 12, gap: 4 },
   messageClient: { alignSelf: 'flex-start', backgroundColor: C.surface2 },
   messageLearner: { alignSelf: 'flex-end', backgroundColor: C.primary },
   messageCoach: { alignSelf: 'center', maxWidth: '100%', backgroundColor: C.blueSoft },
   messageTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
-  messageIt: { flex: 1, color: C.text, fontSize: 15, fontWeight: '800', lineHeight: 21 },
+  messageRoleLabel: { color: 'rgba(255,255,255,0.75)', fontSize: 10, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 2 },
+  messageRoleLabelClient: { color: C.dim, fontSize: 10, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 2 },
+  messageIt: { flexShrink: 1, color: C.text, fontSize: 15, fontWeight: '800', lineHeight: 21 },
   messageLearnerText: { color: '#FFFFFF' },
+  messageFrLearner: { color: 'rgba(255,255,255,0.75)' },
   messageHiddenText: { color: C.dim, fontStyle: 'italic' },
   revealButton: { alignSelf: 'flex-start', borderRadius: 999, backgroundColor: C.redSoft, paddingHorizontal: 10, paddingVertical: 6 },
   revealText: { color: C.red, fontSize: 11, fontWeight: '900' },

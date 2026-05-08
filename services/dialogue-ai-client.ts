@@ -1,6 +1,7 @@
 import type { DialogueMessageRow, ScenarioRow } from '@/database/italpro-local-db';
 import type { B2BMood } from '@/data/b2b-operational';
-import type { LocalClientReply, LocalCorrection } from '@/services/local-dialogue-engine';
+import { getExpoApiBaseUrl } from '@/services/api-base-url';
+import type { GuidedChoiceQuality, LocalClientReply, LocalCorrection } from '@/services/local-dialogue-engine';
 
 export type DialogueAiTurn = {
   correction: LocalCorrection;
@@ -16,11 +17,7 @@ const configuredApiUrl =
   process.env.EXPO_PUBLIC_ITALPRO_API_URL ?? process.env.EXPO_PUBLIC_ITALPRO_AI_URL;
 
 function getApiBaseUrl(): string | null {
-  if (configuredApiUrl && configuredApiUrl.trim().length > 0) {
-    return configuredApiUrl.replace(/\/$/, '');
-  }
-
-  return process.env.EXPO_OS === 'web' ? '/api' : null;
+  return getExpoApiBaseUrl(configuredApiUrl);
 }
 
 function isValidAiTurn(value: DialogueAiResponse): value is {
@@ -47,6 +44,7 @@ export async function requestDialogueAiTurn(input: {
   learnerReply: string;
   history: DialogueMessageRow[];
   mood?: B2BMood;
+  guidedChoiceQuality?: GuidedChoiceQuality;
 }): Promise<DialogueAiTurn | null> {
   if (!hasRemoteDialogueAi()) {
     return null;
