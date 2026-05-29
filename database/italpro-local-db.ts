@@ -395,6 +395,16 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS cached_quiz_items (
+      id TEXT PRIMARY KEY NOT NULL,
+      it TEXT NOT NULL,
+      fr TEXT NOT NULL,
+      phonetic TEXT,
+      category TEXT NOT NULL,
+      explanation TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_scenario_turn ON dialogue_messages(scenario_id, turn_index);
     CREATE INDEX IF NOT EXISTS idx_corrections_scenario_created ON corrections(scenario_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_sm2_next_review ON sm2_cards(next_review);
@@ -403,6 +413,7 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_xp_log_earned_at ON xp_log(earned_at);
     CREATE INDEX IF NOT EXISTS idx_number_lookups_created ON b2b_number_lookups(created_at);
     CREATE INDEX IF NOT EXISTS idx_call_replays_created ON call_replays(created_at);
+    CREATE INDEX IF NOT EXISTS idx_cached_quiz_category ON cached_quiz_items(category);
   `);
 }
 
@@ -1661,13 +1672,25 @@ export async function getLessonProgress(): Promise<LessonProgressRow[]> {
   }));
 }
 
-export async function ensureLessonProgressSeed(lessonIds: string[]): Promise<LessonProgressRow[]> {
+export async function ensureLessonProgressSeed(
+  lessonIds: string[],
+  initiallyAvailableLessonIds: string[] = lessonIds.slice(0, 1),
+): Promise<LessonProgressRow[]> {
   const db = await getItalproDb();
+  const initialAvailable = new Set(initiallyAvailableLessonIds);
   for (const [index, lessonId] of lessonIds.entries()) {
     await db.runAsync(
       `INSERT OR IGNORE INTO lesson_progress (lesson_id, status, updated_at)
        VALUES (?, ?, datetime('now'))`,
-      [lessonId, index === 0 ? 'available' : 'locked'],
+      [lessonId, index === 0 || initialAvailable.has(lessonId) ? 'available' : 'locked'],
+    );
+  }
+  for (const lessonId of initiallyAvailableLessonIds) {
+    await db.runAsync(
+      `UPDATE lesson_progress
+       SET status = 'available', updated_at = datetime('now')
+       WHERE lesson_id = ? AND status = 'locked'`,
+      [lessonId],
     );
   }
   return getLessonProgress();
@@ -1695,6 +1718,50 @@ export async function completeLessonGate(params: {
          status = CASE WHEN status = 'locked' THEN 'available' ELSE status END,
          updated_at = datetime('now')`,
       [params.nextLessonId],
+    );
+  }
+}
+
+// ─── Cached Quiz Items ────────────────────────────────────────────────────────
+
+export type CachedQuizItemRow = {
+  id: string;
+  it: string;
+  fr: string;
+  phonetic: string | null;
+  category: string;
+  explanation: string | null;
+};
+
+export async function getCachedQuizItems(): Promise<CachedQuizItemRow[]> {
+  const db = await getItalproDb();
+  const rows = await db.getAllAsync<{
+    id: string;
+    it: string;
+    fr: string;
+    phonetic: string | null;
+    category: string;
+    explanation: string | null;
+  }>('SELECT id, it, fr, phonetic, category, explanation FROM cached_quiz_items ORDER BY created_at DESC');
+  return rows;
+}
+
+export async function insertCachedQuizItems(
+  items: {
+    id: string;
+    it: string;
+    fr: string;
+    phonetic?: string;
+    category: string;
+    explanation?: string;
+  }[]
+): Promise<void> {
+  const db = await getItalproDb();
+  for (const item of items) {
+    await db.runAsync(
+      `INSERT OR IGNORE INTO cached_quiz_items (id, it, fr, phonetic, category, explanation)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [item.id, item.it, item.fr, item.phonetic ?? null, item.category, item.explanation ?? null]
     );
   }
 }

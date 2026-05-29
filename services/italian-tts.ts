@@ -17,13 +17,13 @@
  */
 
 import { createAudioPlayer, type AudioPlayer } from 'expo-audio';
-import { Directory, File, Paths } from 'expo-file-system';
 import * as Speech from 'expo-speech';
 
 export const ITALIAN_TTS_WORKER_URL =
   process.env.EXPO_PUBLIC_ITALPRO_TTS_URL ?? 'https://italpro-tts.italpro-tts.workers.dev';
 const CACHE_DIR_NAME = 'tts-cache';
 const FETCH_TIMEOUT_MS = 12_000;
+const IS_WEB = process.env.EXPO_OS === 'web';
 
 export type ItalianVoice =
   | 'it-IT-IsabellaNeural'  // F · cordiale (default)
@@ -121,7 +121,7 @@ async function getOrFetchAudio(text: string, opts: SpeakOptions): Promise<string
   const key = cacheKey(voice, ratePct, pitchPct, text);
 
   // Already cached locally?
-  const cached = readCachedFile(key);
+  const cached = await readCachedFile(key);
   if (cached) return cached;
 
   // Coalesce concurrent requests for the same key.
@@ -171,8 +171,15 @@ async function fetchAndCache(
   }
 }
 
-function cacheDir(): Directory {
-  const dir = new Directory(Paths.cache, CACHE_DIR_NAME);
+async function getFileSystem() {
+  if (IS_WEB) return null;
+  return import('expo-file-system');
+}
+
+async function cacheDir() {
+  const fs = await getFileSystem();
+  if (!fs) return null;
+  const dir = new fs.Directory(fs.Paths.cache, CACHE_DIR_NAME);
   if (!dir.exists) {
     try {
       dir.create({ intermediates: true, idempotent: true });
@@ -183,18 +190,30 @@ function cacheDir(): Directory {
   return dir;
 }
 
-function readCachedFile(key: string): string | null {
+async function readCachedFile(key: string): Promise<string | null> {
   try {
-    const file = new File(cacheDir(), `${key}.mp3`);
+    const fs = await getFileSystem();
+    const dir = await cacheDir();
+    if (!fs || !dir) return null;
+    const file = new fs.File(dir, `${key}.mp3`);
     return file.exists ? file.uri : null;
   } catch {
     return null;
   }
 }
 
-function writeCachedFile(key: string, bytes: Uint8Array): string | null {
+async function writeCachedFile(key: string, bytes: Uint8Array): Promise<string | null> {
+  if (IS_WEB) {
+    const arrayBuffer = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(arrayBuffer).set(bytes);
+    return URL.createObjectURL(new Blob([arrayBuffer], { type: 'audio/mpeg' }));
+  }
+
   try {
-    const file = new File(cacheDir(), `${key}.mp3`);
+    const fs = await getFileSystem();
+    const dir = await cacheDir();
+    if (!fs || !dir) return null;
+    const file = new fs.File(dir, `${key}.mp3`);
     if (file.exists) file.delete();
     file.create();
     file.write(bytes);

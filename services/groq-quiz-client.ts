@@ -4,16 +4,13 @@
  */
 
 import type { QuizBankItem } from '@/data/quiz-bank';
+import { getExpoApiBaseUrl } from '@/services/api-base-url';
 
 const configuredApiUrl = process.env.EXPO_PUBLIC_ITALPRO_API_URL ?? '';
 
 function getQuizApiUrl(): string | null {
-  if (configuredApiUrl.trim().length > 0) {
-    return `${configuredApiUrl.replace(/\/$/, '')}/quiz-questions`;
-  }
-  // On web, use relative path to Expo API route
-  if (process.env.EXPO_OS === 'web') return '/api/quiz-questions';
-  return null;
+  const apiBaseUrl = getExpoApiBaseUrl(configuredApiUrl);
+  return apiBaseUrl ? `${apiBaseUrl}/quiz-questions` : null;
 }
 
 export type GroqQuizRequest = {

@@ -3,6 +3,7 @@ import Animated, { FadeInDown, FadeInUp, ZoomIn } from 'react-native-reanimated'
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StatusBar,
@@ -95,8 +96,8 @@ const HINT_SETS: Record<string, HintSet> = {
     wrong: ['Il pagamento si effettua con acconto del 30% e saldo alla consegna.', 'Il container da 40 piedi costa di più ma offre più spazio interno.'],
   },
   winter_comfort: {
-    best: 'Sì, resta caldo se l’isolamento è dimensionato correttamente. Le mando la scheda tecnica dei materiali, foto di moduli già installati e, se vuole, organizziamo una visita o videochiamata.',
-    approx: 'Sì, con un buon isolamento il container può restare confortevole anche in inverno. Le invio qualche foto reale.',
+    best: "Sì, resta caldo se l'isolamento è dimensionato correttamente. Le mando la scheda tecnica dei materiali, foto di moduli già installati e, se vuole, organizziamo una visita o videochiamata.",
+    approx: "Sì, con un buon isolamento il container può restare confortevole anche in inverno. Le invio qualche foto reale.",
     wrong: ['Possiamo consegnarlo in 48 ore se il trasportatore è disponibile.', 'Il colore RAL può essere verde, grigio o bianco secondo il Suo gusto.'],
   },
   availability: {
@@ -280,6 +281,7 @@ export default function CallScreen() {
   const recordingStartedAt = useRef<number | null>(null);
   const callStartedAt = useRef<number | null>(null);
   const lastSpokenClientMessageId = useRef<string | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
 
   const {
     scenarios,
@@ -388,6 +390,12 @@ export default function CallScreen() {
 
     return () => clearInterval(intervalId);
   }, [callStatus]);
+
+  useEffect(() => {
+    if (messages.length > 0) {
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 120);
+    }
+  }, [messages.length]);
 
   const answerCall = useCallback(async () => {
     await tapFeedback();
@@ -552,8 +560,13 @@ export default function CallScreen() {
     }
   }, [activeScenario, activeScenarioId, recorder, report.averageScore, speechReady]);
 
+  const isCallActive = callStatus === 'active';
+
   return (
-    <KeyboardAvoidingView behavior={process.env.EXPO_OS === 'ios' ? 'padding' : undefined} style={styles.root}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.root}
+    >
       <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
 
       {/* ── Fixed header ────────────────────────────────────────────────────── */}
@@ -568,9 +581,12 @@ export default function CallScreen() {
         </View>
       </View>
 
+      {/* ── Scrollable content (sans le Composer) ───────────────────────────── */}
       <ScrollView
+        ref={scrollRef}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        style={styles.scrollFlex}
         contentContainerStyle={styles.scroll}>
 
         <MoodControl mood={mood} onChange={setMood} />
@@ -610,7 +626,7 @@ export default function CallScreen() {
               translated={cheatIt}
               onChangeDraft={setCheatDraft}
               onTranslate={translateCheat}
-              onUse={insertHint}
+              onUse={(text) => { insertHint(text); setCheatDraft(''); setCheatIt(''); }}
             />
 
             {callMode === 'guided' ? (
@@ -621,44 +637,58 @@ export default function CallScreen() {
                 </View>
                 <Text selectable style={styles.hintsSubLabel}>
                   {isLoadingGuidedHints
-                    ? 'L’IA prépare 4 réponses cohérentes…'
+                    ? "L'IA prépare 4 réponses cohérentes…"
                     : isUsingAiGuidedHints
                       ? 'IA · 1 bonne réponse · 1 approximation · 2 pièges'
                       : 'Secours local · 1 bonne réponse · 1 approximation · 2 pièges'}
                 </Text>
                 <View style={styles.hintsList}>
-                  {guidedHints.map((hint) => (
-                    <Pressable
-                      key={hint.id}
-                      accessibilityRole="button"
-                      accessibilityLabel="Utiliser cette réponse"
-                      onPress={() => insertHint(hint.text, hint.quality, hint.id)}
-                      style={({ pressed }) => [styles.hintChip, pressed && styles.hintChipPressed]}>
-                      <Text selectable style={styles.hintText}>{hint.text}</Text>
-                    </Pressable>
-                  ))}
+                  {guidedHints.map((hint) => {
+                    const isSelected = selectedGuidedHint?.id === hint.id;
+                    return (
+                      <Pressable
+                        key={hint.id}
+                        accessibilityRole="button"
+                        accessibilityLabel="Utiliser cette réponse"
+                        accessibilityState={{ selected: isSelected }}
+                        onPress={() => insertHint(hint.text, hint.quality, hint.id)}
+                        style={({ pressed }) => [
+                          styles.hintChip,
+                          isSelected && styles.hintChipSelected,
+                          pressed && styles.hintChipPressed,
+                        ]}>
+                        <Text selectable style={[styles.hintText, isSelected && styles.hintTextSelected]}>{hint.text}</Text>
+                      </Pressable>
+                    );
+                  })}
                 </View>
               </View>
             ) : null}
-
-            <Composer
-              draft={draft}
-              isSending={isSending}
-              isRecording={recorder.state === 'recording'}
-              isProcessing={recorder.state === 'processing' || isTranscribing}
-              recordingSeconds={recordingSeconds}
-              onDraftChange={(value) => {
-                setSelectedGuidedHint(null);
-                setDraft(value);
-              }}
-              onSend={handleSend}
-              onVoicePress={handleVoicePress}
-            />
           </>
         )}
 
-        {error || voiceError ? <Text selectable style={styles.errorText}>{error ?? voiceError}</Text> : null}
+        {error ? <Text selectable style={styles.errorText}>{error}</Text> : null}
       </ScrollView>
+
+      {/* ── Composer fixe en bas, au-dessus du clavier ──────────────────────── */}
+      {isCallActive && (
+        <View style={[styles.composerBar, { paddingBottom: insets.bottom }]}>
+          {voiceError ? <Text selectable style={styles.errorText}>{voiceError}</Text> : null}
+          <Composer
+            draft={draft}
+            isSending={isSending}
+            isRecording={recorder.state === 'recording'}
+            isProcessing={recorder.state === 'processing' || isTranscribing}
+            recordingSeconds={recordingSeconds}
+            onDraftChange={(value) => {
+              setSelectedGuidedHint(null);
+              setDraft(value);
+            }}
+            onSend={handleSend}
+            onVoicePress={handleVoicePress}
+          />
+        </View>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -1154,6 +1184,14 @@ async function persistReplayAudio(uri: string): Promise<string> {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
+  scrollFlex: { flex: 1 },
+  composerBar: {
+    backgroundColor: C.surface,
+    borderTopWidth: 1,
+    borderTopColor: C.border,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
   fixedHeader: {
     backgroundColor: C.bg,
     paddingHorizontal: 20,
@@ -1162,7 +1200,7 @@ const styles = StyleSheet.create({
     borderBottomColor: C.border,
     gap: 2,
   },
-  scroll: { padding: 16, paddingBottom: 36, gap: 12 },
+  scroll: { padding: 16, paddingBottom: 16, gap: 12 },
   kicker: { color: C.primary, fontSize: 12, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.7 },
   title: { color: C.text, fontSize: 28, fontWeight: '900' },
   subtitle: { color: C.muted, fontSize: 13, lineHeight: 18 },
@@ -1264,8 +1302,10 @@ const styles = StyleSheet.create({
   hintsPhaseLabel: { color: C.blue, fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.7 },
   hintsSubLabel: { color: C.blue, fontSize: 11, fontWeight: '700', opacity: 0.75 },
   hintsList: { gap: 8 },
-  hintChip: { backgroundColor: C.surface, borderRadius: 16, padding: 12, gap: 5 },
+  hintChip: { backgroundColor: C.surface, borderRadius: 16, borderWidth: 2, borderColor: C.border, padding: 12, gap: 5 },
+  hintChipSelected: { borderColor: C.blue, backgroundColor: C.blueSoft },
   hintChipPressed: { opacity: 0.82 },
+  hintTextSelected: { color: C.blue },
   hintText: { color: C.text, fontSize: 13, fontWeight: '800', lineHeight: 18 },
   cheatCard: { backgroundColor: C.orangeSoft, borderRadius: 22, padding: 14, gap: 10 },
   cheatBadge: { color: C.orange, fontSize: 11, fontWeight: '900' },

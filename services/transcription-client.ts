@@ -1,5 +1,3 @@
-import { File } from 'expo-file-system';
-
 import { transcribeAudioWithGroq } from '@/services/speech-ai-client';
 
 export type TranscriptionInput = {
@@ -44,13 +42,16 @@ export async function transcribeLocalAudio(
   } catch {
     return null;
   } finally {
-    try {
-      const audioFile = new File(input.uri);
-      if (audioFile.exists) {
-        audioFile.delete();
+    if (process.env.EXPO_OS !== 'web') {
+      try {
+        const { File } = await import('expo-file-system');
+        const audioFile = new File(input.uri);
+        if (audioFile.exists) {
+          audioFile.delete();
+        }
+      } catch {
+        // Best effort cleanup: transcription must not fail because cache deletion failed.
       }
-    } catch {
-      // Best effort cleanup: transcription must not fail because cache deletion failed.
     }
   }
 }

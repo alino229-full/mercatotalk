@@ -348,11 +348,10 @@ const styles = StyleSheet.create({
 
   ctaBtn: {
     backgroundColor: C.primary, borderRadius: 18, padding: 20, alignItems: 'center', gap: 4,
-    shadowColor: C.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3,
-    shadowRadius: 8, elevation: 4,
+    boxShadow: '0 4px 8px rgba(88, 204, 2, 0.3)',
   },
   ctaBtnPressed: { backgroundColor: C.primaryDark },
-  ctaBtnDone: { backgroundColor: C.primaryLight, shadowColor: 'transparent', elevation: 0 },
+  ctaBtnDone: { backgroundColor: C.primaryLight, boxShadow: 'none' },
   ctaTitle: { color: '#FFFFFF', fontSize: 18, fontWeight: '900' },
   ctaSub: { color: 'rgba(255,255,255,0.85)', fontSize: 13 },
   card: {

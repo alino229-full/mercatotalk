@@ -9,6 +9,8 @@ export type QuizBankItem = {
   fr: string;
   phonetic?: string;
   category: string;
+  /** Règle de grammaire / astuce affichée après la réponse (optionnel). */
+  explanation?: string;
 };
 
 const BANK: QuizBankItem[] = [
@@ -37,7 +39,7 @@ const BANK: QuizBankItem[] = [
   { id: 'num-pr', it: 'il prezzo unitario', fr: 'le prix unitaire', category: 'nombres' },
 
   // ── Conjugaisons essere ────────────────────────────────────────────────────
-  { id: 'conj-e01', it: 'io sono', fr: 'je suis', phonetic: '[ˈsoːno]', category: 'conjugaison' },
+  { id: 'conj-e01', it: 'io sono', fr: 'je suis', phonetic: '[ˈsoːno]', category: 'conjugaison', explanation: 'Essere (être) : sono, sei, è, siamo, siete, sono. Attention : "sono" = je suis ET ils/elles sont (le contexte tranche).' },
   { id: 'conj-e02', it: 'tu sei', fr: 'tu es', phonetic: '[sɛi]', category: 'conjugaison' },
   { id: 'conj-e03', it: 'lui / lei è', fr: 'il / elle est', phonetic: '[ɛ]', category: 'conjugaison' },
   { id: 'conj-e04', it: 'noi siamo', fr: 'nous sommes', phonetic: '[ˈsjaːmo]', category: 'conjugaison' },
@@ -45,7 +47,7 @@ const BANK: QuizBankItem[] = [
   { id: 'conj-e06', it: 'loro sono', fr: 'ils / elles sont', category: 'conjugaison' },
 
   // ── Conjugaisons avere ────────────────────────────────────────────────────
-  { id: 'conj-a01', it: 'io ho', fr: 'j\'ai', phonetic: '[ɔ]', category: 'conjugaison' },
+  { id: 'conj-a01', it: 'io ho', fr: 'j\'ai', phonetic: '[ɔ]', category: 'conjugaison', explanation: 'Avere (avoir) : ho, hai, ha, abbiamo, avete, hanno. Le H est toujours muet. Sert aussi à exprimer l\'âge : "ho 30 anni".' },
   { id: 'conj-a02', it: 'tu hai', fr: 'tu as', phonetic: '[ai]', category: 'conjugaison' },
   { id: 'conj-a03', it: 'lui / lei ha', fr: 'il / elle a', phonetic: '[a]', category: 'conjugaison' },
   { id: 'conj-a04', it: 'noi abbiamo', fr: 'nous avons', phonetic: '[abˈbjaːmo]', category: 'conjugaison' },
@@ -87,6 +89,14 @@ const BANK: QuizBankItem[] = [
   { id: 'gr-08', it: 'quello / quella', fr: 'ce / cette (éloigné)', category: 'grammaire' },
   { id: 'gr-09', it: 'mio / mia', fr: 'mon / ma', category: 'grammaire' },
   { id: 'gr-10', it: 'suo / sua', fr: 'son / sa (aussi votre avec Lei)', category: 'grammaire' },
+  { id: 'gr-11', it: 'il ragazzo → i ragazzi', fr: 'masculin en -o → pluriel en -i', category: 'grammaire' },
+  { id: 'gr-12', it: 'la casa → le case', fr: 'féminin en -a → pluriel en -e', category: 'grammaire' },
+  { id: 'gr-13', it: 'il fiore → i fiori', fr: 'nom en -e → pluriel en -i', category: 'grammaire' },
+  { id: 'gr-14', it: 'di + il = del', fr: 'préposition articulée : du / de le', category: 'grammaire' },
+  { id: 'gr-15', it: 'a + la = alla', fr: 'préposition articulée : à la', category: 'grammaire' },
+  { id: 'gr-16', it: 'in + il = nel', fr: 'préposition articulée : dans le', category: 'grammaire' },
+  { id: 'gr-17', it: 'qualche + singolare', fr: 'quelques + singulier en italien', category: 'grammaire' },
+  { id: 'gr-18', it: 'nessuno / nessuna', fr: 'personne / aucun / aucune', category: 'grammaire' },
 
   // ── Phrases B2B complètes ─────────────────────────────────────────────────
   { id: 'ph-01', it: 'Come posso aiutarLa?', fr: 'Comment puis-je vous aider ?', category: 'phrases' },
@@ -305,17 +315,17 @@ const BANK: QuizBankItem[] = [
   // ── Passé composé ─────────────────────────────────────────────────────────
   { id: 'pass-01', it: 'ho mangiato', fr: 'j\'ai mangé', phonetic: '[ɔ manˈdʒaːto]', category: 'passé' },
   { id: 'pass-02', it: 'ho parlato', fr: 'j\'ai parlé', category: 'passé' },
-  { id: 'pass-03', it: 'sono andato / andata', fr: 'je suis allé(e)', phonetic: '[ˈsoːno anˈdaːto]', category: 'passé' },
+  { id: 'pass-03', it: 'sono andato / andata', fr: 'je suis allé(e)', phonetic: '[ˈsoːno anˈdaːto]', category: 'passé', explanation: 'Verbes de mouvement/état → auxiliaire ESSERE. Le participe s\'accorde : andato (m.), andata (f.), andati (m.pl.), andate (f.pl.).' },
   { id: 'pass-04', it: 'ho capito', fr: 'j\'ai compris', category: 'passé' },
   { id: 'pass-05', it: 'ho visto / ho sentito', fr: 'j\'ai vu / j\'ai entendu', category: 'passé' },
   { id: 'pass-06', it: 'siamo arrivati', fr: 'nous sommes arrivés', category: 'passé' },
   { id: 'pass-07', it: 'hai fatto / ha fatto', fr: 'tu as fait / il a fait', category: 'passé' },
-  { id: 'pass-08', it: 'participio passato -ato / -ito / -uto', fr: 'participe passé : -er→-ato, -ir→-ito, -re→-uto', category: 'passé' },
+  { id: 'pass-08', it: 'participio passato -ato / -ito / -uto', fr: 'participe passé : -er→-ato, -ir→-ito, -re→-uto', category: 'passé', explanation: 'Verbes -ARE → -ato (parlare→parlato), -ERE → -uto (credere→creduto), -IRE → -ito (finire→finito). Le passé composé = avere/essere + participe passé.' },
 
   // ── Pronoms COD ───────────────────────────────────────────────────────────
   { id: 'cod-01', it: 'mi (me)', fr: 'me / m\'', phonetic: '[mi]', category: 'pronoms_cod' },
   { id: 'cod-02', it: 'ti (te)', fr: 'te / t\'', phonetic: '[ti]', category: 'pronoms_cod' },
-  { id: 'cod-03', it: 'lo (lui/il)', fr: 'le / l\'', phonetic: '[lo]', category: 'pronoms_cod' },
+  { id: 'cod-03', it: 'lo (lui/il)', fr: 'le / l\'', phonetic: '[lo]', category: 'pronoms_cod', explanation: 'Le pronom COD se place AVANT le verbe conjugué : "Lo vedo" (je le vois). Avec un infinitif, il se colle à la fin : "voglio vederlo".' },
   { id: 'cod-04', it: 'la (lei/la)', fr: 'la / l\'', phonetic: '[la]', category: 'pronoms_cod' },
   { id: 'cod-05', it: 'ci (nous)', fr: 'nous / nous', phonetic: '[tʃi]', category: 'pronoms_cod' },
   { id: 'cod-06', it: 'vi (vous)', fr: 'vous / vous', phonetic: '[vi]', category: 'pronoms_cod' },

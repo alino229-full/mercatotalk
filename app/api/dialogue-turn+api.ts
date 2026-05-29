@@ -57,7 +57,7 @@ export async function POST(request: Request) {
           {
             role: 'system',
             content:
-              'Tu es un coach italien B2B pour commerciaux francophones. Reponds uniquement en JSON valide avec correction et clientReply. Le client doit rester naturel, prudent et professionnel. Si un mood client est fourni, adapte nettement le ton italien.',
+              'Tu es un moteur de simulation d appel B2B. Tu generes deux choses: (1) une correction pedagogique de la replique apprenant, (2) la prochaine replique du client en italien. CRITICAL: le champ MOOD_CLIENT_ACTIF dans le prompt utilisateur definit le caractere et le ton du client. Tu DOIS l appliquer strictement dans clientReply. Un client mefiant reste mefiant, un client presse reste presse, etc. Reponds uniquement en JSON valide.',
           },
           {
             role: 'user',
@@ -98,6 +98,14 @@ export async function POST(request: Request) {
   }
 }
 
+const MOOD_DESCRIPTIONS: Record<string, string> = {
+  mefiant: 'Client MEFIANT: il remet en cause toutes les affirmations, exige des preuves concretes (SIRET, references verifiables, inspection, contrat), refuse toute promesse vague, pose des questions courtes et directes, reste soupconneux meme apres une bonne reponse.',
+  presse: 'Client PRESSE: repliques tres courtes, interrompt parfois, veut prix + delais + inclus en 3 points maximum, ne supporte pas les introductions ni les generalites, prend ses decisions vite si les infos sont claires.',
+  irrite: 'Client IRRITE: ton sec et tendu, fait reference a de mauvaises experiences passees avec des fournisseurs, objections fortes et credibles, refuse les accords verbaux, exige tout par ecrit, se calme seulement si la reponse est precise et honnete.',
+  cordial: 'Client CORDIAL: ton chaleureux et ouvert, pose des questions de curiosite sincere, apprecie les exemples concrets et les photos, accepte les prochaines etapes si elles sont claires, cree une relation mais reste professionnel.',
+  professionnel: 'Client PROFESSIONNEL: rationnel et methodique, compare les fournisseurs sur des criteres objectifs (prix HT/TTC, delai, conditions de paiement, certifications), demande des specs techniques precises, ne signe pas sans documentation complete.',
+};
+
 function buildPrompt(
   scenario: ScenarioRow,
   learnerReply: string,
@@ -105,6 +113,7 @@ function buildPrompt(
   mood?: B2BMood,
   guidedChoiceQuality?: GuidedChoiceQuality,
 ): string {
+  const activeMood = mood ?? 'professionnel';
   const compactHistory = history.slice(-8).map((message) => ({
     role: message.role,
     it: message.contentIt,
@@ -112,6 +121,8 @@ function buildPrompt(
   }));
 
   return JSON.stringify({
+    MOOD_CLIENT_ACTIF: activeMood,
+    INSTRUCTION_MOOD: `${MOOD_DESCRIPTIONS[activeMood]} — La replique clientReply DOIT obligatoirement reflechir ce comportement. Ne l ignore pas.`,
     scenario: {
       title: scenario.title,
       marketContext: scenario.marketContext,
@@ -120,17 +131,23 @@ function buildPrompt(
       productContext: scenario.productContext,
       successCriteria: scenario.successCriteria,
     },
-    mood: mood ?? 'professionnel',
-    moodRules: {
-      presse: 'phrases courtes, interruptions, demande prix/delais vite',
-      mefiant: 'demande preuves, garanties, references, refuse les promesses vagues',
-      irrite: 'ton sec, impatience, objection dure mais credible',
-      cordial: 'ouvert, relationnel, accepte les questions',
-      professionnel: 'compare rationnellement fournisseur, TVA, livraison, conditions',
-    },
     history: compactHistory,
     learnerReply,
     guidedChoiceQuality,
+    guidedChoiceRule:
+      guidedChoiceQuality === 'wrong'
+        ? 'La reponse apprenant vient d un piege hors sujet: le client doit reagir selon son mood, pointer que cela ne repond pas, puis reformuler sa demande.'
+        : guidedChoiceQuality === 'approx'
+          ? 'La reponse apprenant est presque correcte mais trop vague: le client, selon son mood, doit demander une preuve ou une precision concrete.'
+          : guidedChoiceQuality === 'best'
+            ? 'La reponse apprenant est la meilleure option guidee: le client doit avancer vers l etape suivante en restant dans son mood.'
+            : 'La reponse apprenant est libre: evalue-la normalement.',
+    conversationRules: [
+      'Ne repete jamais mot pour mot une question client deja posee dans history.',
+      'Si l apprenant a apporte des preuves de fiabilite (SIRET, references, inspection, contrat, paiement securise), passe a une nouvelle objection ou etape coherente avec le mood.',
+      'Apres 6 tours apprenant ou si le closing est atteint, le client peut terminer la conversation en demandant un recapitulatif ecrit.',
+      'Le ton et le vocabulaire de clientReply doivent toujours rester coherents avec MOOD_CLIENT_ACTIF.',
+    ],
     expectedJsonShape: {
       correction: {
         score: 'number 0-100',
@@ -144,24 +161,11 @@ function buildPrompt(
         },
       },
       clientReply: {
-        contentIt: 'prochaine replique du client en italien',
+        contentIt: 'prochaine replique du client en italien selon son mood',
         contentFr: 'traduction francaise',
         coachingNote: 'objectif pedagogique du prochain tour en francais',
       },
     },
-    guidedChoiceRule:
-      guidedChoiceQuality === 'wrong'
-        ? 'La reponse apprenant vient d un piege hors sujet: le client doit reagir naturellement, pointer que cela ne repond pas, puis reformuler sa demande.'
-        : guidedChoiceQuality === 'approx'
-          ? 'La reponse apprenant est presque correcte mais trop vague: le client doit demander une preuve ou une precision.'
-          : guidedChoiceQuality === 'best'
-            ? 'La reponse apprenant est la meilleure option guidee: le client doit avancer vers l etape suivante, sans repeter la meme question.'
-            : 'La reponse apprenant est libre: evalue-la normalement.',
-    conversationRules: [
-      'Ne repete jamais mot pour mot une question client deja posee dans history.',
-      'Si l apprenant a apporte des preuves de fiabilite (SIRET, references, inspection, contrat, paiement securise), passe a une nouvelle objection ou a la prochaine etape.',
-      'Apres 6 tours apprenant ou si le closing est atteint, le client peut terminer la conversation en demandant un recapitulatif ecrit.',
-    ],
   });
 }
 

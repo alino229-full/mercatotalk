@@ -11,7 +11,16 @@ export type LessonDetail = {
   title: string;
   icon: string;
   grammarTip?: string;
+  grammarExercises?: GrammarExercise[];
   vocab: VocabItem[];
+};
+
+export type GrammarExercise = {
+  id: string;
+  prompt: string;
+  choices: string[];
+  answer: string;
+  hint?: string;
 };
 
 export const lessonDetails: LessonDetail[] = [
@@ -473,6 +482,105 @@ export const lessonDetails: LessonDetail[] = [
       { it: 'verra\' / verranno', fr: 'il viendra / ils viendront', example: 'Verra\' anche lui alla festa.' },
       { it: 'domani / la settimana prossima', fr: 'demain / la semaine prochaine', example: 'La settimana prossima partiro\' per Roma.' },
       { it: 'fra / tra + duree', fr: 'dans + duree', example: 'Fra due giorni arriveranno i colleghi.' },
+    ],
+  },
+  {
+    id: 'gen3-noms-pluriels',
+    phaseId: 'phase-gen3',
+    title: 'Noms et pluriels',
+    icon: '🧩',
+    grammarTip: 'Base essentielle: les noms masculins en -o font souvent le pluriel en -i, les feminins en -a deviennent -e, et les noms en -e deviennent -i. Attention aux mots invariables et aux noms frequents qui ne suivent pas le reflexe francais: il problema, la mano, il cinema.',
+    grammarExercises: [
+      {
+        id: 'pluriel-problema',
+        prompt: 'Choisis le bon pluriel : il problema',
+        choices: ['i problemi', 'le probleme', 'i problema'],
+        answer: 'i problemi',
+        hint: 'Les noms en -ma d origine grecque sont souvent masculins.',
+      },
+      {
+        id: 'pluriel-citta',
+        prompt: 'Choisis le bon pluriel : la citta',
+        choices: ['le citta', 'le citte', 'i citti'],
+        answer: 'le citta',
+        hint: 'Les mots termines par une voyelle accentuee sont souvent invariables.',
+      },
+    ],
+    vocab: [
+      { it: 'il ragazzo → i ragazzi', fr: 'le garcon → les garcons', phonetic: '[raˈɡattso]', example: 'I ragazzi studiano italiano.' },
+      { it: 'la casa → le case', fr: 'la maison → les maisons', phonetic: '[ˈkaːza]', example: 'Le case sono vicino al centro.' },
+      { it: 'il fiore → i fiori', fr: 'la fleur → les fleurs', phonetic: '[ˈfjoːre]', example: 'I fiori sono sul tavolo.' },
+      { it: 'la notte → le notti', fr: 'la nuit → les nuits', phonetic: '[ˈnɔtte]', example: 'Le notti d\'estate sono calde.' },
+      { it: 'il problema → i problemi', fr: 'le probleme → les problemes (masculin)', example: 'Abbiamo risolto i problemi principali.' },
+      { it: 'la mano → le mani', fr: 'la main → les mains (feminin irregulier)', example: 'Mi lavo le mani.' },
+      { it: 'la citta\' → le citta\'', fr: 'la ville → les villes (invariable)', example: 'Le citta\' italiane sono bellissime.' },
+      { it: 'il cinema → i cinema', fr: 'le cinema → les cinemas (souvent invariable)', example: 'I cinema del centro sono aperti.' },
+    ],
+  },
+  {
+    id: 'gen3-preposizioni-articolate',
+    phaseId: 'phase-gen3',
+    title: 'Prepositions articulees',
+    icon: '🧭',
+    grammarTip: 'En italien, plusieurs prepositions se contractent obligatoirement avec l\'article defini: di + il = del, a + la = alla, da + lo = dallo, in + i = nei, su + gli = sugli. C\'est une cle pour parler naturellement de lieu, possession, origine et sujet.',
+    grammarExercises: [
+      {
+        id: 'prep-prezzo',
+        prompt: 'Complete : Il prezzo ___ prodotto e competitivo.',
+        choices: ['del', 'al', 'nel'],
+        answer: 'del',
+        hint: 'On exprime ici le lien "de + le produit".',
+      },
+      {
+        id: 'prep-giorni',
+        prompt: 'Complete : ___ prossimi giorni Le mando tutto.',
+        choices: ['Nei', 'Dai', 'Sugli'],
+        answer: 'Nei',
+        hint: 'in + i devient nei.',
+      },
+    ],
+    vocab: [
+      { it: 'di + il = del', fr: 'de + le = du', phonetic: '[del]', example: 'Il prezzo del prodotto e\' competitivo.' },
+      { it: 'di + la = della', fr: 'de + la', phonetic: '[ˈdella]', example: 'La qualita\' della merce e\' alta.' },
+      { it: 'a + il = al', fr: 'a + le = au', phonetic: '[al]', example: 'Vado al mercato domani.' },
+      { it: 'a + la = alla', fr: 'a + la', phonetic: '[ˈalla]', example: 'Scrivo alla cliente oggi.' },
+      { it: 'da + lo = dallo', fr: 'de / chez + le', phonetic: '[ˈdallo]', example: 'Parto dallo studio alle sei.' },
+      { it: 'in + il = nel', fr: 'dans + le', phonetic: '[nel]', example: 'Il documento e\' nel contratto.' },
+      { it: 'in + i = nei', fr: 'dans + les (masc.)', phonetic: '[nei]', example: 'Nei prossimi giorni Le mando tutto.' },
+      { it: 'su + gli = sugli', fr: 'sur + les', phonetic: '[ˈsuʎʎi]', example: 'Abbiamo dati sugli ultimi ordini.' },
+    ],
+  },
+  {
+    id: 'gen3-indefiniti-utili',
+    phaseId: 'phase-gen3',
+    title: 'Indefinis utiles',
+    icon: '✨',
+    grammarTip: 'Les indefinis permettent de parler sans tout preciser: qualche, alcuni, ogni, nessuno, tutto, altro. Piege francophone: "qualche" est suivi du singulier mais se traduit souvent par "quelques". "Nessuno" demande souvent une negation avec non.',
+    grammarExercises: [
+      {
+        id: 'indefinito-qualche',
+        prompt: 'Quelle phrase est correcte ?',
+        choices: ['Ho qualche domanda.', 'Ho qualche domande.', 'Ho alcuni domanda.'],
+        answer: 'Ho qualche domanda.',
+        hint: 'Qualche est suivi du singulier.',
+      },
+      {
+        id: 'indefinito-nessun',
+        prompt: 'Complete : Non c e ___ problema.',
+        choices: ['nessun', 'qualche', 'tutti'],
+        answer: 'nessun',
+        hint: 'Nessuno devient nessun devant un nom masculin singulier.',
+      },
+    ],
+    vocab: [
+      { it: 'qualche + singolare', fr: 'quelques + pluriel en francais', phonetic: '[ˈkwalkɛ]', example: 'Ho qualche domanda per Lei.' },
+      { it: 'alcuni / alcune', fr: 'quelques / certains', phonetic: '[alˈkuːni]', example: 'Alcuni clienti preferiscono pagare subito.' },
+      { it: 'ogni', fr: 'chaque', phonetic: '[ˈoɲɲi]', example: 'Ogni settimana facciamo un controllo.' },
+      { it: 'tutto / tutta', fr: 'tout / toute', phonetic: '[ˈtutto]', example: 'Ho letto tutta la documentazione.' },
+      { it: 'tutti / tutte', fr: 'tous / toutes', example: 'Tutti i prezzi sono IVA esclusa.' },
+      { it: 'nessuno / nessuna', fr: 'personne / aucun', phonetic: '[nesˈsuːno]', example: 'Non c\'e\' nessun problema.' },
+      { it: 'altro / altra', fr: 'autre', phonetic: '[ˈaltro]', example: 'Ha bisogno di un\'altra informazione?' },
+      { it: 'troppo / molto / poco', fr: 'trop / beaucoup / peu', example: 'E\' troppo caro, ma possiamo adattare l\'offerta.' },
     ],
   },
 

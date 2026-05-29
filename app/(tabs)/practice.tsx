@@ -18,6 +18,7 @@ import type { QuizQuestion, QuizSessionState } from '@/hooks/use-quiz-session';
 import { useItalianTTS } from '@/hooks/use-italian-tts';
 import { useQuizSession } from '@/hooks/use-quiz-session';
 import { useXp } from '@/hooks/use-xp';
+import { useVoiceRecorder } from '@/hooks/use-voice-recorder';
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ const TYPE_LABELS: Record<string, string> = {
   it_to_fr: '🇮🇹 → 🇫🇷  Que signifie ce mot ?',
   fr_to_it: '🇫🇷 → 🇮🇹  Comment dit-on en italien ?',
   listen_to_fr: '🔊  Écoutez et choisissez la traduction',
+  dictation: '✍️  Dictée - Écoutez et écrivez en italien',
 };
 
 // ─── Main screen ──────────────────────────────────────────────────────────────
@@ -110,13 +112,13 @@ function QuizStartScreen({ session, isQuick }: { session: QuizSessionState; isQu
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={[styles.startScroll, { paddingTop: insets.top + 24 }]}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
-      <Animated.View entering={ZoomIn.duration(420)} style={styles.startHero}>
+      <View style={styles.startHero}>
         <Text style={styles.startEmoji}>{isQuick ? '⚡' : '🎯'}</Text>
         <Text style={styles.startTitle}>{isQuick ? 'Révision rapide' : 'Quiz prêt'}</Text>
         <Text style={styles.startSub}>
           {session.totalInSeries} questions · 15 secondes par question
         </Text>
-      </Animated.View>
+      </View>
 
       <View style={styles.startRules}>
         <Text selectable style={styles.startRule}>+10 XP par bonne réponse · combo ×2 dès le 3e</Text>
@@ -124,6 +126,9 @@ function QuizStartScreen({ session, isQuick }: { session: QuizSessionState; isQu
 
       <View style={styles.modeToggleRow}>
         <Pressable
+          accessibilityRole="switch"
+          accessibilityLabel="Activer ou desactiver le mode difficile avec saisie clavier"
+          accessibilityState={{ checked: session.hardMode }}
           onPress={session.toggleHardMode}
           style={[styles.modeToggle, session.hardMode && styles.modeToggleActive]}>
           <Text style={[styles.modeToggleText, session.hardMode && styles.modeToggleTextActive]}>
@@ -222,12 +227,14 @@ function QuizQuestionScreen({ session }: { session: QuizSessionState }) {
 
         <PromptCard question={q} onPlayAudio={session.playAudio} />
 
-        {session.hardMode ? (
+        {session.hardMode || q.type === 'dictation' ? (
           <HardModeInput
             question={q}
             isAnswered={isAnswered}
             answerState={session.answerState}
             onSubmit={session.submitTypedAnswer}
+            isTranscribing={session.isTranscribing}
+            submitVoiceAnswer={session.submitVoiceAnswer}
           />
         ) : (
           <View style={styles.choicesGrid}>
@@ -253,6 +260,9 @@ function QuizQuestionScreen({ session }: { session: QuizSessionState }) {
               return (
                 <View key={choice.id}>
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Choisir la reponse ${choice.label}`}
+                    accessibilityState={{ selected: isSelected, disabled: isAnswered }}
                     onPress={() => session.selectChoice(choice.id)}
                     disabled={isAnswered}
                     style={({ pressed }) => [
@@ -291,6 +301,12 @@ function QuizQuestionScreen({ session }: { session: QuizSessionState }) {
               </Text>
             )}
             {q.phonetic ? <Text style={styles.feedbackPhonetic}>{q.phonetic}</Text> : null}
+            {q.explanation ? (
+              <View style={styles.explanationBox}>
+                <Text style={styles.explanationLabel}>💡 Règle</Text>
+                <Text style={styles.explanationText}>{q.explanation}</Text>
+              </View>
+            ) : null}
           </Animated.View>
         )}
 
@@ -307,13 +323,18 @@ function HardModeInput({
   isAnswered,
   answerState,
   onSubmit,
+  isTranscribing,
+  submitVoiceAnswer,
 }: {
   question: QuizQuestion;
   isAnswered: boolean;
   answerState: string;
   onSubmit: (text: string) => void;
+  isTranscribing: boolean;
+  submitVoiceAnswer: (uri: string) => Promise<string | null>;
 }) {
   const [draft, setDraft] = useState('');
+  const recorder = useVoiceRecorder();
   const correctLabel = question.choices.find((c) => c.id === question.correctId)?.label ?? '';
 
   const handleSubmit = useCallback(() => {
@@ -322,15 +343,31 @@ function HardModeInput({
     setDraft('');
   }, [draft, onSubmit]);
 
+  const handleMicPress = async () => {
+    if (recorder.state === 'recording') {
+      const res = await recorder.stopRecording();
+      if (res) {
+        const transcribed = await submitVoiceAnswer(res.uri);
+        if (transcribed) {
+          setDraft(transcribed);
+        }
+      }
+    } else {
+      await recorder.startRecording();
+    }
+  };
+
   return (
     <View style={styles.hardModeBox}>
-      <Text style={styles.hardModeHint}>Tapez votre traduction en {question.type === 'fr_to_it' ? 'italien' : 'français'}</Text>
+      <Text style={styles.hardModeHint}>Tapez votre traduction en {question.type === 'fr_to_it' || question.type === 'dictation' ? 'italien' : 'français'}</Text>
       <TextInput
+        accessibilityLabel={`Votre traduction en ${question.type === 'fr_to_it' || question.type === 'dictation' ? 'italien' : 'francais'}`}
+        autoComplete="off"
         autoFocus
-        editable={!isAnswered}
+        editable={!isAnswered && recorder.state !== 'recording' && !isTranscribing}
         onChangeText={setDraft}
         onSubmitEditing={handleSubmit}
-        placeholder={question.type === 'fr_to_it' ? 'Répondre en italien...' : 'Répondre en français...'}
+        placeholder={question.type === 'fr_to_it' || question.type === 'dictation' ? 'Répondre en italien...' : 'Répondre en français...'}
         placeholderTextColor={C.dim}
         returnKeyType="done"
         style={[
@@ -341,12 +378,32 @@ function HardModeInput({
         value={draft}
       />
       {!isAnswered ? (
-        <Pressable
-          disabled={!draft.trim()}
-          onPress={handleSubmit}
-          style={({ pressed }) => [styles.hardModeSubmit, !draft.trim() && styles.hardModeSubmitDisabled, pressed && { opacity: 0.85 }]}>
-          <Text style={styles.hardModeSubmitText}>Valider →</Text>
-        </Pressable>
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Valider la reponse saisie"
+            accessibilityState={{ disabled: !draft.trim() }}
+            disabled={!draft.trim()}
+            onPress={handleSubmit}
+            style={({ pressed }) => [styles.hardModeSubmit, { flex: 1 }, !draft.trim() && styles.hardModeSubmitDisabled, pressed && { opacity: 0.85 }]}>
+            <Text style={styles.hardModeSubmitText}>Valider →</Text>
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={recorder.state === 'recording' ? "Arrêter l'enregistrement" : "Parler pour répondre"}
+            onPress={handleMicPress}
+            disabled={isTranscribing}
+            style={({ pressed }) => [
+              styles.micBtn,
+              recorder.state === 'recording' && styles.micBtnRecording,
+              pressed && { opacity: 0.85 }
+            ]}>
+            <Text style={styles.micBtnText}>
+              {recorder.state === 'recording' ? '🔴 Stop' : isTranscribing ? '⏳ ...' : '🎙️ Vocal'}
+            </Text>
+          </Pressable>
+        </View>
       ) : (
         <View style={[styles.hardModeReveal, answerState === 'correct' ? styles.hardModeRevealCorrect : styles.hardModeRevealWrong]}>
           <Text style={styles.hardModeRevealText}>
@@ -361,13 +418,14 @@ function HardModeInput({
 // ─── Prompt card ─────────────────────────────────────────────────────────────
 
 function PromptCard({ question, onPlayAudio }: { question: QuizQuestion; onPlayAudio: () => void }) {
-  const isListen = question.type === 'listen_to_fr';
+  const isListen = question.type === 'listen_to_fr' || question.type === 'dictation';
 
   return (
     <Animated.View entering={FadeIn.duration(300)} style={styles.promptCard}>
       {isListen ? (
         <View style={styles.promptListen}>
           <Pressable
+            accessibilityRole="button"
             onPress={onPlayAudio}
             style={({ pressed }) => [styles.audioBtn, pressed && styles.audioBtnPressed]}
             accessibilityLabel="Écouter le mot en italien">
@@ -382,7 +440,11 @@ function PromptCard({ question, onPlayAudio }: { question: QuizQuestion; onPlayA
             <Text style={styles.promptPhonetic}>{question.phonetic}</Text>
           ) : null}
           {question.type === 'it_to_fr' && (
-            <Pressable onPress={onPlayAudio} style={styles.listenSmallBtn}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Écouter ce mot en italien"
+              onPress={onPlayAudio}
+              style={styles.listenSmallBtn}>
               <Text style={styles.listenSmallText}>🔊 Écouter</Text>
             </Pressable>
           )}
@@ -467,6 +529,8 @@ function SeriesResultScreen({ session }: { session: QuizSessionState }) {
 
       <Animated.View entering={FadeInUp.delay(400).duration(400)} style={styles.resultActions}>
         <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Lancer une nouvelle serie de ${total} questions`}
           onPress={session.startNewSeries}
           style={({ pressed }) => [styles.newSeriesBtn, pressed && { opacity: 0.85 }]}>
           <Text style={styles.newSeriesBtnText}>Nouvelle série de {total} →</Text>
@@ -484,7 +548,11 @@ function MissedRow({ it, fr }: { it: string; fr: string }) {
   }, [it, tts]);
 
   return (
-    <Pressable onPress={speak} style={styles.missedRow}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Ecouter la carte a retravailler ${it}`}
+      onPress={speak}
+      style={styles.missedRow}>
       <View style={styles.missedLeft}>
         <Text style={styles.missedIt}>{it}</Text>
         <Text style={styles.missedFr}>{fr}</Text>
@@ -529,8 +597,7 @@ const styles = StyleSheet.create({
   modeToggleTextActive: { color: C.purple },
   startButton: {
     backgroundColor: C.primary, borderRadius: 18, alignItems: 'center', paddingVertical: 17,
-    shadowColor: C.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3,
-    shadowRadius: 8, elevation: 4,
+    boxShadow: '0 4px 8px rgba(88, 204, 2, 0.3)',
   },
   startButtonPressed: { backgroundColor: C.primaryDark },
   startButtonText: { color: '#FFFFFF', fontSize: 17, fontWeight: '900' },
@@ -575,7 +642,7 @@ const styles = StyleSheet.create({
   promptCard: {
     backgroundColor: C.surface, borderRadius: 24, borderWidth: 1.5, borderColor: C.border,
     padding: 28, alignItems: 'center', gap: 14,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2,
+    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.06)',
   },
   promptListen: { alignItems: 'center', gap: 10, paddingVertical: 10 },
   audioBtn: {
@@ -633,6 +700,15 @@ const styles = StyleSheet.create({
   feedbackHint: { color: C.text, fontSize: 14, lineHeight: 20 },
   feedbackAnswer: { fontWeight: '900', color: C.primaryDark },
   feedbackPhonetic: { color: C.muted, fontSize: 12, fontStyle: 'italic' },
+  explanationBox: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.08)',
+    gap: 3,
+  },
+  explanationLabel: { fontSize: 11, fontWeight: '900', color: C.blue, textTransform: 'uppercase', letterSpacing: 0.5 },
+  explanationText: { fontSize: 13, color: C.text, lineHeight: 19 },
   nextBtn: { borderRadius: 16, paddingVertical: 14, alignItems: 'center', marginTop: 4 },
   nextBtnCorrect: { backgroundColor: C.primary },
   nextBtnWrong: { backgroundColor: C.wrong },
@@ -664,8 +740,24 @@ const styles = StyleSheet.create({
   resultActions: { alignItems: 'center', gap: 10, paddingTop: 8 },
   newSeriesBtn: {
     backgroundColor: C.primary, borderRadius: 18, paddingHorizontal: 32, paddingVertical: 18,
-    shadowColor: C.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4,
+    boxShadow: '0 4px 8px rgba(88, 204, 2, 0.3)',
   },
   newSeriesBtnText: { color: '#FFFFFF', fontSize: 17, fontWeight: '900' },
   resultTotal: { color: C.dim, fontSize: 13 },
+  micBtn: {
+    backgroundColor: C.blue,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+  },
+  micBtnRecording: {
+    backgroundColor: C.wrong,
+  },
+  micBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '900',
+  },
 });

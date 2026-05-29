@@ -58,10 +58,10 @@ export const phases: LearningPhase[] = [
     id: 'phase-gen3',
     title: 'Grammaire et structures',
     weeks: 'Semaines 5-8',
-    goal: 'Conjuguer au present, au passe, au futur et utiliser les pronoms COD.',
+    goal: 'Conjuguer au present, au passe, au futur, utiliser les pronoms COD et consolider les structures de base.',
     progress: 0,
     accentColor: '#FF9600',
-    lessons: ['Verbes au present', 'Present continu', 'Pronoms COD', 'Passe compose', 'Passe continu', 'Le futur'],
+    lessons: ['Verbes au present', 'Present continu', 'Pronoms COD', 'Passe compose', 'Passe continu', 'Le futur', 'Noms et pluriels', 'Prepositions articulees', 'Indefinis utiles'],
   },
   {
     id: 'phase-vocab',

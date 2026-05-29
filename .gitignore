@@ -44,3 +44,9 @@ app-example
 # generated native folders
 /ios
 /android
+
+.agents/
+.claude/
+.continue/
+expo-server-*.log
+skills-lock.json

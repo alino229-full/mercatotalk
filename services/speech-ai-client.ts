@@ -1,3 +1,5 @@
+import { getExpoApiBaseUrl } from '@/services/api-base-url';
+
 const configuredApiUrl =
   process.env.EXPO_PUBLIC_ITALPRO_API_URL ?? process.env.EXPO_PUBLIC_ITALPRO_AI_URL;
 const hfSpaceUrl =
@@ -37,11 +39,7 @@ type HfSpaceQueueEvent = {
 };
 
 function getApiBaseUrl(): string | null {
-  if (configuredApiUrl && configuredApiUrl.trim().length > 0) {
-    return configuredApiUrl.replace(/\/$/, '');
-  }
-
-  return process.env.EXPO_OS === 'web' ? '/api' : null;
+  return getExpoApiBaseUrl(configuredApiUrl);
 }
 
 export type TranscriptionResult = {

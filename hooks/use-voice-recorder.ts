@@ -4,7 +4,7 @@ import {
   setAudioModeAsync,
   useAudioRecorder,
 } from 'expo-audio';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 export type VoiceRecorderState = 'idle' | 'recording' | 'processing';
 
@@ -34,6 +34,9 @@ export type VoiceRecorder = {
 export function useVoiceRecorder(): VoiceRecorder {
   const [state, setState] = useState<VoiceRecorderState>('idle');
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  // expo-audio's getStatus().durationMillis returns 0 immediately after stop(),
+  // so we track elapsed time ourselves for a reliable duration.
+  const startedAtMs = useRef<number | null>(null);
 
   const startRecording = useCallback(async (): Promise<boolean> => {
     try {
@@ -47,9 +50,11 @@ export function useVoiceRecorder(): VoiceRecorder {
 
       await recorder.prepareToRecordAsync();
       recorder.record();
+      startedAtMs.current = Date.now();
       setState('recording');
       return true;
     } catch {
+      startedAtMs.current = null;
       setState('idle');
       return false;
     }
@@ -58,20 +63,18 @@ export function useVoiceRecorder(): VoiceRecorder {
   const stopRecording = useCallback(async (): Promise<VoiceRecorderResult | null> => {
     if (state !== 'recording') return null;
 
+    const durationMs = startedAtMs.current ? Date.now() - startedAtMs.current : 0;
+    startedAtMs.current = null;
     setState('processing');
 
     try {
       await recorder.stop();
       await setAudioModeAsync({ allowsRecording: false });
 
-      const status = recorder.getStatus();
       const uri = recorder.uri;
       if (!uri) return null;
 
-      return {
-        uri,
-        durationMs: status.durationMillis,
-      };
+      return { uri, durationMs };
     } catch {
       return null;
     } finally {

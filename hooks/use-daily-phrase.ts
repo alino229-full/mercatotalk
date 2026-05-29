@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getDailyPhrase, saveDailyPhrase, type DailyPhrase } from '@/database/italpro-local-db';
+import { getExpoApiBaseUrl } from '@/services/api-base-url';
 
 // ─── Context rotation ─────────────────────────────────────────────────────────
 
@@ -60,8 +61,7 @@ function getDayContextIndex(): number {
 
 function getApiBaseUrl(): string | null {
   const url = process.env.EXPO_PUBLIC_ITALPRO_API_URL ?? process.env.EXPO_PUBLIC_ITALPRO_AI_URL;
-  if (url && url.trim().length > 0) return url.replace(/\/$/, '');
-  return process.env.EXPO_OS === 'web' ? '/api' : null;
+  return getExpoApiBaseUrl(url);
 }
 
 async function fetchPhraseFromApi(

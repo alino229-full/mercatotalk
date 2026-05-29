@@ -19,6 +19,9 @@ type GroqChatResponse = {
 
 type GuidedChoicesAiResponse = {
   choices?: Partial<GuidedReplyChoice>[];
+  replies?: Partial<GuidedReplyChoice>[];
+  options?: Partial<GuidedReplyChoice>[];
+  propositions?: Partial<GuidedReplyChoice>[];
 };
 
 const corsHeaders = {
@@ -54,12 +57,13 @@ export async function POST(request: Request) {
       body: JSON.stringify({
         model: process.env.GROQ_LLM_MODEL ?? 'llama-3.3-70b-versatile',
         temperature: 0.72,
+        max_tokens: 1600,
         response_format: { type: 'json_object' },
         messages: [
           {
             role: 'system',
             content:
-              'Tu generes des choix de reponse pour un simulateur d appel commercial italien B2B. Reponds uniquement en JSON valide. Les choix doivent etre naturels, courts, en italien professionnel avec Lei, et strictement coherents avec la derniere question du client.',
+              'Tu generes 4 propositions de reponse pour un apprenant qui repond en italien a un client B2B. Le champ MOOD_CLIENT_ACTIF dans le prompt definit le caractere du client: les 4 repliques proposees doivent etre adaptees a ce type de client specifique. La meilleure reponse doit etre celle qui repond le mieux a un client ayant CE mood precis. Reponds uniquement en JSON valide.',
           },
           {
             role: 'user',
@@ -106,8 +110,19 @@ function buildPrompt(
     fr: message.contentFr,
   }));
 
+  const activeMood = mood ?? 'professionnel';
+  const moodDescriptions: Record<string, string> = {
+    mefiant: 'Client mefiant: exige des preuves, references et garanties. La meilleure reponse doit apporter une preuve concrete ou proposer une inspection.',
+    presse: 'Client presse: repliques courtes attendues. La meilleure reponse doit aller droit au but: prix + delai + inclus en 1-2 phrases.',
+    irrite: 'Client irrite: objections fortes. La meilleure reponse doit calmer et proposer quelque chose de tangible et contractuellement solide.',
+    cordial: 'Client cordial: ouvert et curieux. La meilleure reponse peut inclure un exemple concret ou proposer une visite/demonstration.',
+    professionnel: 'Client professionnel: veut des chiffres et specs precis. La meilleure reponse doit contenir des donnees ou proposer une documentation technique.',
+  };
+
   return JSON.stringify({
-    task: 'Generer 4 propositions de reponse pour l agent commercial francophone qui doit repondre en italien.',
+    MOOD_CLIENT_ACTIF: activeMood,
+    INSTRUCTION_MOOD: moodDescriptions[activeMood] ?? moodDescriptions['professionnel'],
+    task: 'Generer 4 propositions de reponse que l agent commercial francophone pourrait dire en italien pour repondre a la derniere question du client.',
     scenario: {
       title: scenario.title,
       marketContext: scenario.marketContext,
@@ -116,7 +131,6 @@ function buildPrompt(
       productContext: scenario.productContext,
       successCriteria: scenario.successCriteria,
     },
-    mood: mood ?? 'professionnel',
     history: compactHistory,
     latestClientQuestion: {
       it: latestClientMessage.contentIt,
@@ -125,15 +139,15 @@ function buildPrompt(
     },
     requiredOutput: {
       choices: [
-        { id: 'best', quality: 'best', text: 'une seule meilleure reponse en italien' },
+        { id: 'best', quality: 'best', text: 'la meilleure reponse adaptee au mood du client' },
         { id: 'approx', quality: 'approx', text: 'une reponse presque correcte mais trop vague ou incomplete' },
         { id: 'wrong-1', quality: 'wrong', text: 'un piege hors sujet mais plausible' },
         { id: 'wrong-2', quality: 'wrong', text: 'un deuxieme piege clairement faux ou mal priorise' },
       ],
     },
     strictRules: [
-      'Ne reutilise pas une banque de reponses fixe: adapte les 4 choix a latestClientQuestion.',
-      'La meilleure reponse doit repondre directement a la question du client, puis ouvrir une prochaine etape utile.',
+      'Ne reutilise pas une banque de reponses fixe: adapte les 4 choix a latestClientQuestion et au MOOD_CLIENT_ACTIF.',
+      'La meilleure reponse doit repondre directement a la question du client de facon adaptee a son mood.',
       'L approximation doit rester comprehensible mais manquer de preuve, precision ou question de qualification.',
       'Les deux mauvaises reponses doivent etre coherentes grammaticalement mais hors sujet par rapport a la question.',
       'Tous les textes doivent etre en italien, en registre professionnel formel avec Lei/Le/Suo/Sua.',
@@ -144,32 +158,74 @@ function buildPrompt(
 }
 
 function normalizeGuidedChoices(value: GuidedChoicesAiResponse): GuidedReplyChoice[] {
-  const rawChoices = Array.isArray(value.choices) ? value.choices : [];
+  const rawChoices = getRawChoices(value);
   const cleaned = rawChoices
-    .filter((choice): choice is GuidedReplyChoice =>
-      typeof choice.id === 'string' &&
-      typeof choice.text === 'string' &&
-      (choice.quality === 'best' || choice.quality === 'approx' || choice.quality === 'wrong'),
-    )
-    .map((choice) => ({
-      id: choice.id,
-      text: choice.text.trim(),
-      quality: choice.quality,
-    }))
-    .filter((choice) => choice.text.length > 0);
+    .map((choice, index) => normalizeChoice(choice, index))
+    .filter((choice): choice is GuidedReplyChoice => choice !== null);
 
   const best = cleaned.find((choice) => choice.quality === 'best');
   const approx = cleaned.find((choice) => choice.quality === 'approx');
   const wrong = cleaned.filter((choice) => choice.quality === 'wrong').slice(0, 2);
 
-  if (!best || !approx || wrong.length !== 2) {
-    throw new Error('JSON guided-choices incomplet.');
-  }
+  const fallback = getFallbackGuidedChoices();
 
   return [
-    { ...best, id: 'ai-best' },
-    { ...approx, id: 'ai-approx' },
-    { ...wrong[0]!, id: 'ai-wrong-1' },
-    { ...wrong[1]!, id: 'ai-wrong-2' },
+    { ...(best ?? fallback[0]!), id: 'ai-best' },
+    { ...(approx ?? fallback[1]!), id: 'ai-approx' },
+    { ...(wrong[0] ?? fallback[2]!), id: 'ai-wrong-1' },
+    { ...(wrong[1] ?? fallback[3]!), id: 'ai-wrong-2' },
+  ];
+}
+
+function getRawChoices(value: GuidedChoicesAiResponse): Partial<GuidedReplyChoice>[] {
+  if (Array.isArray(value.choices)) return value.choices;
+  if (Array.isArray(value.replies)) return value.replies;
+  if (Array.isArray(value.options)) return value.options;
+  if (Array.isArray(value.propositions)) return value.propositions;
+  return [];
+}
+
+function normalizeChoice(choice: Partial<GuidedReplyChoice>, index: number): GuidedReplyChoice | null {
+  if (!choice || typeof choice !== 'object') return null;
+  if (typeof choice.text !== 'string' || choice.text.trim().length === 0) return null;
+
+  const inferredQuality =
+    choice.quality === 'best' || choice.quality === 'approx' || choice.quality === 'wrong'
+      ? choice.quality
+      : index === 0
+        ? 'best'
+        : index === 1
+          ? 'approx'
+          : 'wrong';
+
+  return {
+    id: typeof choice.id === 'string' && choice.id.trim() ? choice.id.trim() : `ai-choice-${index}`,
+    text: choice.text.trim(),
+    quality: inferredQuality,
+  };
+}
+
+function getFallbackGuidedChoices(): GuidedReplyChoice[] {
+  return [
+    {
+      id: 'fallback-best',
+      quality: 'best',
+      text: 'Capisco. Le confermo il punto principale e Le mando subito un riepilogo scritto con prezzo, tempi e condizioni.',
+    },
+    {
+      id: 'fallback-approx',
+      quality: 'approx',
+      text: 'Sì, possiamo gestirlo. Le preparo una proposta più precisa dopo la chiamata.',
+    },
+    {
+      id: 'fallback-wrong-1',
+      quality: 'wrong',
+      text: 'Non è importante adesso, parliamo piuttosto di un altro prodotto.',
+    },
+    {
+      id: 'fallback-wrong-2',
+      quality: 'wrong',
+      text: 'Non lo so, ma possiamo firmare subito comunque.',
+    },
   ];
 }

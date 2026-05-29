@@ -1,14 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { getAllQuizItems, type QuizBankItem } from '@/data/quiz-bank';
-import { addXp, getAllCards, insertLearningSession, unlockAchievement, updateCardAfterReview } from '@/database/italpro-local-db';
+import {
+  addXp,
+  getAllCards,
+  insertLearningSession,
+  unlockAchievement,
+  updateCardAfterReview,
+  getDueCards,
+  getCachedQuizItems,
+  insertCachedQuizItems,
+} from '@/database/italpro-local-db';
 import { fetchGroqQuizItems } from '@/services/groq-quiz-client';
 import { errorFeedback, successFeedback, warningFeedback } from '@/services/haptics';
 import { speakIt, stopIt } from '@/services/italian-tts';
+import { transcribeLocalAudio } from '@/services/transcription-client';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type QuestionType = 'it_to_fr' | 'fr_to_it' | 'listen_to_fr';
+export type QuestionType = 'it_to_fr' | 'fr_to_it' | 'listen_to_fr' | 'dictation';
 
 export type QuizChoice = { id: string; label: string };
 
@@ -22,6 +32,7 @@ export type QuizQuestion = {
   fr: string;
   phonetic?: string | null;
   category: string;
+  explanation?: string;
   sm2CardId?: string;
 };
 
@@ -63,12 +74,14 @@ export type QuizSessionState = {
   comboMultiplier: number;
   /** Hard mode: user types the answer instead of choosing */
   hardMode: boolean;
+  isTranscribing: boolean;
   startSession: () => void;
   pauseSession: () => void;
   resumeSession: () => void;
   playAudio: () => void;
   selectChoice: (id: string) => void;
   submitTypedAnswer: (text: string) => void;
+  submitVoiceAnswer: (uri: string) => Promise<string | null>;
   toggleHardMode: () => void;
   startNewSeries: () => Promise<void>;
 };
@@ -91,36 +104,101 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
+/**
+ * Nettoie une chaîne d'affichage de quiz :
+ *  - retire les annotations pédagogiques entre parenthèses  ex: "ce / cette (pres du locuteur)" → "ce / cette"
+ *  - retire les annotations après tiret cadratin            ex: "maison — C dur [k]" → "maison"
+ *  - retire les transcriptions phonétiques entre crochets   ex: "casa [k]" → "casa"
+ * Les slashs (variantes de genre/conjugaison) sont conservés volontairement.
+ */
+function cleanQuizText(value: string): string {
+  return value
+    .replace(/\s*\([^)]*\)/g, '')   // (…)
+    .replace(/\s*\[[^\]]*\]/g, '')  // […]
+    .split('—')[0]!
+    .split(' - ')[0]!
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Sélectionne 3 distracteurs cohérents : d'abord dans la MÊME catégorie
+ * (questions plus crédibles), puis complète avec d'autres si besoin.
+ */
+function pickCoherentDistractors(item: QuizBankItem, pool: QuizBankItem[]): QuizBankItem[] {
+  const sameCat = pool.filter((p) => p.id !== item.id && p.category === item.category);
+  const otherCat = pool.filter((p) => p.id !== item.id && p.category !== item.category);
+  return [...shuffle(sameCat), ...shuffle(otherCat)].slice(0, 3);
+}
+
 function randomType(): QuestionType {
   const r = Math.random();
-  if (r < 0.38) return 'it_to_fr';
-  if (r < 0.76) return 'fr_to_it';
-  return 'listen_to_fr';
+  if (r < 0.30) return 'it_to_fr';
+  if (r < 0.60) return 'fr_to_it';
+  if (r < 0.80) return 'listen_to_fr';
+  return 'dictation';
 }
 
 function buildQuestion(item: QuizBankItem, type: QuestionType, pool: QuizBankItem[]): QuizQuestion {
   const uid = `${item.id}-${type}-${Math.random()}`;
-  const wrong = shuffle(pool.filter((p) => p.id !== item.id)).slice(0, 3);
+  const wrong = pickCoherentDistractors(item, pool);
   const sm2CardId = item.id.startsWith('sm2-') ? item.id.slice(4) : undefined;
 
-  if (type === 'fr_to_it') {
-    const correct: QuizChoice = { id: item.id, label: item.it };
-    const choices = shuffle([correct, ...wrong.map((w) => ({ id: w.id, label: w.it }))]).filter(
-      (choice) => choice.label.trim().length > 0,
+  const itClean = cleanQuizText(item.it);
+  const frClean = cleanQuizText(item.fr);
+
+  if (type === 'fr_to_it' || type === 'dictation') {
+    const correct: QuizChoice = { id: item.id, label: itClean };
+    const choices = dedupeChoices(
+      shuffle([correct, ...wrong.map((w) => ({ id: w.id, label: cleanQuizText(w.it) }))]),
     );
-    return { uid, type, prompt: item.fr, choices, correctId: item.id, it: item.it, fr: item.fr, phonetic: item.phonetic, category: item.category, sm2CardId };
+    return {
+      uid,
+      type,
+      prompt: type === 'fr_to_it' ? frClean : itClean,
+      choices,
+      correctId: item.id,
+      it: item.it,
+      fr: item.fr,
+      phonetic: item.phonetic,
+      category: item.category,
+      explanation: item.explanation,
+      sm2CardId,
+    };
   }
 
-  const correct: QuizChoice = { id: item.id, label: item.fr };
-  const choices = shuffle([correct, ...wrong.map((w) => ({ id: w.id, label: w.fr }))]).filter(
-    (choice) => choice.label.trim().length > 0,
+  const correct: QuizChoice = { id: item.id, label: frClean };
+  const choices = dedupeChoices(
+    shuffle([correct, ...wrong.map((w) => ({ id: w.id, label: cleanQuizText(w.fr) }))]),
   );
-  return { uid, type, prompt: item.it, choices, correctId: item.id, it: item.it, fr: item.fr, phonetic: item.phonetic, category: item.category, sm2CardId };
+  return { uid, type, prompt: itClean, choices, correctId: item.id, it: item.it, fr: item.fr, phonetic: item.phonetic, category: item.category, explanation: item.explanation, sm2CardId };
 }
 
-function buildSeries(pool: QuizBankItem[], size: number): QuizQuestion[] {
+/** Évite deux choix identiques après nettoyage (sinon réponse ambiguë). */
+function dedupeChoices(choices: QuizChoice[]): QuizChoice[] {
+  const seen = new Set<string>();
+  const out: QuizChoice[] = [];
+  for (const c of choices) {
+    const key = c.label.toLowerCase();
+    if (c.label.trim().length === 0 || seen.has(key)) continue;
+    seen.add(key);
+    out.push(c);
+  }
+  return out;
+}
+
+function buildSeries(pool: QuizBankItem[], size: number, dueItems: QuizBankItem[] = []): QuizQuestion[] {
   if (pool.length < 4) return [];
-  const picked = shuffle(pool).slice(0, size);
+  // Prioritize due items first
+  const pickedDue = shuffle(dueItems).slice(0, size);
+  const remainingSize = size - pickedDue.length;
+
+  const dueIds = new Set(pickedDue.map((d) => d.id));
+  const remainingPool = pool.filter((p) => !dueIds.has(p.id));
+
+  const pickedRemaining = shuffle(remainingPool).slice(0, remainingSize);
+  const picked = [...pickedDue, ...pickedRemaining];
+
   return picked
     .map((item) => buildQuestion(item, randomType(), pool))
     .filter((question) => question.choices.length >= 4);
@@ -166,6 +244,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
   const [isPaused, setIsPaused] = useState(false);
   const [combo, setCombo] = useState(0);
   const [hardMode, setHardMode] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
 
   const comboMultiplier = combo >= 3 ? 2 : 1;
 
@@ -224,7 +303,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
       setLastXpAward(null);
       setTimeLeft(QUESTION_TIME_SECONDS);
       const nextQ = questionsRef.current[next];
-      if (nextQ?.type === 'listen_to_fr') {
+      if (nextQ?.type === 'listen_to_fr' || nextQ?.type === 'dictation') {
         setTimeout(() => { void speakIt(nextQ.prompt, { rate: 0.82 }); }, 200);
       }
     }
@@ -298,6 +377,25 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     [selectChoice],
   );
 
+  const submitVoiceAnswer = useCallback(
+    async (uri: string): Promise<string | null> => {
+      setIsTranscribing(true);
+      try {
+        const result = await transcribeLocalAudio({ uri, language: 'it' });
+        if (result && result.text) {
+          submitTypedAnswer(result.text);
+          return result.text;
+        }
+        return null;
+      } catch {
+        return null;
+      } finally {
+        setIsTranscribing(false);
+      }
+    },
+    [submitTypedAnswer]
+  );
+
   const toggleHardMode = useCallback(() => {
     setHardMode((prev) => !prev);
   }, []);
@@ -323,7 +421,17 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     answeredRef.current = false;
     sessionStart.current = Date.now();
 
-    const localSeries = buildSeries(pool, seriesSize);
+    // Fetch due cards to prioritize them in the series
+    const dueSm2Cards = await getDueCards(seriesSize).catch(() => []);
+    const dueItems: QuizBankItem[] = dueSm2Cards.map((c) => ({
+      id: `sm2-${c.id}`,
+      it: c.frontIt,
+      fr: c.frontFr,
+      phonetic: c.phonetic ?? undefined,
+      category: c.category,
+    }));
+
+    const localSeries = buildSeries(pool, seriesSize, dueItems);
     questionsRef.current = localSeries;
     setQuestions(localSeries);
     setSource('local');
@@ -335,8 +443,11 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
       : 70;
 
     fetchGroqQuizItems({ weakCategories: weakCats, recentScore, count: 30 })
-      .then((groqItems) => {
+      .then(async (groqItems) => {
         if (!groqItems || groqItems.length < 4) return;
+        // Save dynamically fetched questions in local SQLite cache
+        await insertCachedQuizItems(groqItems).catch(() => null);
+
         const enriched = shuffle([...pool, ...groqItems]);
         setLocalPool(enriched);
         setTotalItems(enriched.length);
@@ -363,7 +474,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     setIsPaused(false);
     sessionStart.current = Date.now();
     const q = questionsRef.current[indexRef.current];
-    if (q?.type === 'listen_to_fr') {
+    if (q?.type === 'listen_to_fr' || q?.type === 'dictation') {
       setTimeout(() => { void speakIt(q.prompt, { rate: 0.82 }); }, 180);
     }
   }, []);
@@ -390,7 +501,11 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
   useEffect(() => {
     (async () => {
       setIsLoading(true);
-      const [sm2Cards, bankItems] = await Promise.all([getAllCards(), getAllQuizItems()]);
+      const [sm2Cards, bankItems, cachedDbItems] = await Promise.all([
+        getAllCards(),
+        getAllQuizItems(),
+        getCachedQuizItems().catch(() => []),
+      ]);
 
       const sm2Items: QuizBankItem[] = sm2Cards.map((c) => ({
         id: `sm2-${c.id}`,
@@ -400,7 +515,16 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
         category: c.category,
       }));
 
-      const merged = shuffle([...sm2Items, ...bankItems]);
+      const cachedItems: QuizBankItem[] = cachedDbItems.map((c) => ({
+        id: c.id,
+        it: c.it,
+        fr: c.fr,
+        phonetic: c.phonetic ?? undefined,
+        category: c.category,
+        explanation: c.explanation ?? undefined,
+      }));
+
+      const merged = shuffle([...sm2Items, ...bankItems, ...cachedItems]);
       setLocalPool(merged);
       setTotalItems(merged.length);
 
@@ -453,12 +577,14 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     combo,
     comboMultiplier,
     hardMode,
+    isTranscribing,
     startSession,
     pauseSession,
     resumeSession,
     playAudio,
     selectChoice,
     submitTypedAnswer,
+    submitVoiceAnswer,
     toggleHardMode,
     startNewSeries: handleNewSeries,
   };

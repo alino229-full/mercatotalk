@@ -57,7 +57,7 @@ ${scorePart}
 
 Retourne UNIQUEMENT un tableau JSON valide, sans texte ni code fence, au format suivant :
 [
-  { "it": "mot ou phrase en italien", "fr": "traduction en français", "phonetic": "[phonétique IPA optionnelle]", "category": "nom_catégorie" }
+  { "it": "mot ou phrase en italien", "fr": "traduction en français", "phonetic": "[phonétique IPA optionnelle]", "category": "nom_catégorie", "explanation": "[Astuce grammaticale, explication de vocabulaire ou règle de politesse en français, optionnelle]" }
 ]
 
 Catégories possibles : nombres, conjugaison, verbes, grammaire, phrases, objections, produit, qualification, politesse, délais, géographie.
@@ -67,6 +67,7 @@ Règles :
 - Inclure des phrases B2B complètes (ex: "Le invio il preventivo domani" / "Je vous envoie le devis demain")
 - Couvrir au moins 5 catégories différentes
 - phonetic est optionnel (inclure seulement pour les mots difficiles)
+- explanation est optionnelle mais fortement recommandée pour les phrases B2B, expressions complexes et verbes (fournir une explication utile en français)
 - Ne pas répéter les items
 - Répondre UNIQUEMENT avec le JSON brut`;
 
@@ -116,7 +117,7 @@ Règles :
 
     // Validate & sanitise each item
     const valid = items
-      .filter((item): item is { it: string; fr: string; category: string; phonetic?: string } => {
+      .filter((item): item is { it: string; fr: string; category: string; phonetic?: string; explanation?: string } => {
         if (!item || typeof item !== 'object') return false;
         const o = item as Record<string, unknown>;
         return typeof o['it'] === 'string' && o['it'].length > 0 &&
@@ -130,6 +131,8 @@ Règles :
         phonetic: typeof item.phonetic === 'string' && item.phonetic.trim().length > 0
           ? item.phonetic.trim() : undefined,
         category: item.category.trim(),
+        explanation: typeof item.explanation === 'string' && item.explanation.trim().length > 0
+          ? item.explanation.trim() : undefined,
       }));
 
     if (valid.length < 4) {
