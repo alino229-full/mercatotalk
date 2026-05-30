@@ -2,7 +2,7 @@
 
 Application Expo mobile-first pour entrainer un commercial francophone a tenir des appels professionnels en italien.
 
-La strategie technique est "offline-first + services gratuits": SQLite local pour que l'app reste interactive sans reseau, puis Groq, Kokoro et Supabase quand une connexion et des quotas sont disponibles.
+La strategie technique est "offline-first + services gratuits": SQLite local pour que l'app reste interactive sans reseau, puis Groq, Cloudflare Worker TTS et Supabase quand une connexion et des quotas sont disponibles.
 
 ## Stack services
 
@@ -10,7 +10,7 @@ La strategie technique est "offline-first + services gratuits": SQLite local pou
 | --- | --- | --- |
 | Dialogue IA, correction, coaching | Groq LLM `llama-3.3-70b-versatile` | Free tier Groq |
 | Speech-to-text | Groq Whisper `whisper-large-v3-turbo` | Free tier Groq |
-| Text-to-speech naturel | HF Kokoro Space, puis HF Inference ou self-hosted | Gratuit selon quota |
+| Text-to-speech naturel | Deepgram Aura-2 → Worker Edge → expo-speech | Free tier Deepgram |
 | Auth, DB, metadonnees uniquement | Supabase | Free tier Supabase |
 | Memoire mobile offline | Expo SQLite | Local gratuit |
 
@@ -21,14 +21,14 @@ app/
   api/
     dialogue-turn+api.ts   Proxy serveur vers Groq LLM
     transcribe+api.ts      Proxy serveur vers Groq Whisper
-    tts+api.ts             Proxy serveur vers Kokoro TTS
+    tts+api.ts             Proxy serveur vers Deepgram Aura-2 (cle serveur)
 database/
   italpro-local-db.ts      SQLite local: scenarios, messages, corrections
 lib/
   supabase.ts              Client Supabase Expo avec stockage local SQLite
 services/
-  dialogue-ai-client.ts    App mobile -> proxy dialogue
-  speech-ai-client.ts      App mobile -> proxy STT/TTS
+  italian-tts.ts           TTS neuronal via Cloudflare Worker + cache local + fallback expo-speech
+  speech-ai-client.ts      App mobile -> proxy STT (Groq Whisper)
 supabase/
   schema.sql               Tables et RLS, sans stockage audio
 ```
@@ -71,6 +71,9 @@ cp .env.example .env
 
 ```env
 EXPO_PUBLIC_ITALPRO_API_URL=
+EXPO_PUBLIC_ITALPRO_TTS_URL=https://italpro-tts.italpro-tts.workers.dev
+EXPO_PUBLIC_DEEPGRAM_TTS_MODEL=aura-2-livia-it
+EXPO_PUBLIC_DEEPGRAM_TTS_MODEL_M=aura-2-dionisio-it
 
 EXPO_PUBLIC_SUPABASE_URL=
 EXPO_PUBLIC_SUPABASE_ANON_KEY=
@@ -80,22 +83,7 @@ GROQ_API_KEY=
 GROQ_LLM_MODEL=llama-3.3-70b-versatile
 GROQ_STT_MODEL=whisper-large-v3-turbo
 
-EXPO_PUBLIC_KOKORO_PROVIDER=hf-space
-EXPO_PUBLIC_HF_KOKORO_SPACE_URL=https://hexgrad-kokoro-tts.hf.space/api/predict
-EXPO_PUBLIC_KOKORO_TTS_VOICE=if_sara
-EXPO_PUBLIC_KOKORO_TTS_SPEED=1.0
-EXPO_PUBLIC_HF_TOKEN=
-EXPO_PUBLIC_HF_KOKORO_MODEL_URL=https://api-inference.huggingface.co/models/hexgrad/Kokoro-82M
-
-KOKORO_TTS_PROVIDER=hf-space
-HF_KOKORO_SPACE_URL=https://hexgrad-kokoro-tts.hf.space/api/predict
-HF_TOKEN=
-HF_KOKORO_MODEL_URL=https://api-inference.huggingface.co/models/hexgrad/Kokoro-82M
-KOKORO_TTS_BASE_URL=
-KOKORO_TTS_MODEL=kokoro
-KOKORO_TTS_VOICE=if_sara
-KOKORO_TTS_SPEED=1.0
-KOKORO_TTS_RESPONSE_FORMAT=wav
+DEEPGRAM_API_KEY=
 
 SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_JWT_SECRET=
@@ -183,77 +171,46 @@ Modele par defaut:
 GROQ_STT_MODEL=whisper-large-v3-turbo
 ```
 
-## Kokoro TTS via Hugging Face Space
+## TTS — chaine a 3 niveaux
 
-Option la plus rapide pour tester, sans infrastructure et sans cle:
+Le TTS essaie les fournisseurs dans l'ordre, avec fallback automatique:
 
-```env
-EXPO_PUBLIC_KOKORO_PROVIDER=hf-space
-EXPO_PUBLIC_HF_KOKORO_SPACE_URL=https://hexgrad-kokoro-tts.hf.space/api/predict
-EXPO_PUBLIC_KOKORO_TTS_VOICE=if_sara
-EXPO_PUBLIC_KOKORO_TTS_SPEED=1.0
-```
+1. **Deepgram Aura-2** via le proxy serveur `POST /api/tts` (la cle reste cote serveur)
+2. **Cloudflare Worker** → Microsoft Edge Neural TTS (`speech.platform.bing.com`)
+3. **expo-speech** → voix native du telephone (totalement hors-ligne)
 
-Voix italiennes conseillees:
+Chaque niveau a son propre cache fichier local (replay instantane, meme hors-ligne).
+En cas d'echec, un niveau se met en cooldown 60 s avant nouvelle tentative.
 
-- `if_sara`: voix feminine italienne, meilleure qualite
-- `if_nicola`: voix masculine italienne
-- `im_nicola`: variante masculine
-
-Le Space retourne une URL temporaire vers le fichier `.wav`. Le client peut l'utiliser directement, ou passer par `/api/tts` qui recupere le fichier et le renvoie a l'app sans stockage.
-
-Appel direct de test:
-
-```ts
-const response = await fetch("https://hexgrad-kokoro-tts.hf.space/api/predict", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    data: ["Buongiorno, come posso aiutarla?", "if_sara", 1.0],
-  }),
-});
-
-const json = await response.json();
-const audioUrl = json.data[1];
-```
-
-Limite attendue: environ 100 requetes/jour sur le free tier HF Space.
-
-## Kokoro TTS via HF Inference API
-
-Plus stable que le Space, avec un token Hugging Face gratuit:
+### Niveau 1 — Deepgram Aura-2
 
 ```env
-EXPO_PUBLIC_KOKORO_PROVIDER=hf-inference
-EXPO_PUBLIC_HF_TOKEN=
-EXPO_PUBLIC_HF_KOKORO_MODEL_URL=https://api-inference.huggingface.co/models/hexgrad/Kokoro-82M
+DEEPGRAM_API_KEY=
+EXPO_PUBLIC_DEEPGRAM_TTS_MODEL=aura-2-livia-it
+EXPO_PUBLIC_DEEPGRAM_TTS_MODEL_M=aura-2-dionisio-it
 ```
 
-Pour une prod plus propre, ne mets pas le token dans `EXPO_PUBLIC_HF_TOKEN`; utilise plutot:
+Voix italiennes Aura-2 disponibles:
+
+| Modele | Genre |
+| --- | --- |
+| `aura-2-livia-it` | F (defaut) |
+| `aura-2-dionisio-it` | M (defaut) |
+| `aura-2-melia-it`, `aura-2-maia-it`, `aura-2-cinzia-it`, `aura-2-demetra-it` | F |
+| `aura-2-elio-it`, `aura-2-flavio-it`, `aura-2-cesare-it`, `aura-2-perseo-it` | M |
+
+L'endpoint serveur appelle `https://api.deepgram.com/v1/speak?model=...&encoding=mp3`
+avec le header `Authorization: Token DEEPGRAM_API_KEY`. Limite Aura: 2000 caracteres/requete.
+
+### Niveau 2 — Worker Edge
 
 ```env
-KOKORO_TTS_PROVIDER=hf-inference
-HF_TOKEN=
+EXPO_PUBLIC_ITALPRO_TTS_URL=https://italpro-tts.italpro-tts.workers.dev
 ```
 
-Le proxy `/api/tts` garde alors le token cote serveur.
-
-## Kokoro TTS self-hosted
-
-Si le quota HF devient trop limite, repasse en self-hosted:
-
-```bash
-docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
-```
-
-Puis configure:
-
-```env
-KOKORO_TTS_PROVIDER=self-hosted
-KOKORO_TTS_BASE_URL=http://localhost:8880/v1
-KOKORO_TTS_MODEL=kokoro
-KOKORO_TTS_RESPONSE_FORMAT=mp3
-```
+Voix Edge italiennes: `it-IT-IsabellaNeural` (defaut), `it-IT-ElsaNeural`,
+`it-IT-DiegoNeural`, `it-IT-GiuseppeNeural`, `it-IT-PalmiraNeural`.
+Les voix masculines (Diego, Giuseppe) sont mappees vers `aura-2-dionisio-it` au niveau 1.
 
 ## Supabase
 
@@ -301,7 +258,7 @@ curl http://localhost:8081/api/health
 MercatoTalk doit rester utilisable si un service gratuit atteint ses limites:
 
 - Groq indisponible: correction locale et scenario SQLite.
-- Kokoro indisponible: fallback `expo-speech`.
+- Deepgram indisponible: fallback Worker Edge, puis `expo-speech` (voix native du telephone).
 - Supabase indisponible: donnees locales SQLite.
 - Reseau coupe: historique et corrections locales restent disponibles.
 
@@ -312,4 +269,3 @@ MercatoTalk doit rester utilisable si un service gratuit atteint ses limites:
 - Expo env vars: https://docs.expo.dev/guides/environment-variables/
 - Expo API routes: https://docs.expo.dev/router/reference/api-routes/
 - Supabase Expo: https://supabase.com/docs/guides/with-expo
-- Kokoro-FastAPI: https://github.com/remsky/Kokoro-FastAPI

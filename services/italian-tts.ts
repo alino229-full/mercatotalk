@@ -1,14 +1,16 @@
 /**
- * Italian TTS — neural voices via the Cloudflare Worker proxy.
+ * Italian TTS — neural voices with a 3-tier fallback chain.
  * ─────────────────────────────────────────────────────────────
  *
- * Two-tier caching:
+ *   Tier 1 · Deepgram Aura-2 (via the /api/tts server proxy, key stays server-side)
+ *   Tier 2 · Cloudflare Worker → Microsoft Edge Neural TTS
+ *   Tier 3 · expo-speech (device voice, fully offline)
+ *
+ * Two-tier caching per provider:
  *   1. Local file cache (FileSystem) → same phrase replayed instantly, even offline.
- *   2. Worker edge cache (30 days)  → first user worldwide pays the synthesis cost,
- *      everyone else gets the MP3 instantly.
+ *   2. Worker edge cache (30 days)  → shared synthesis cost for the Edge tier.
  *
  * Drop-in replacement for `Speech.speak` / `Speech.stop` from expo-speech.
- * Falls back to `expo-speech` automatically if the network or worker is unavailable.
  *
  *   import { speakIt, stopIt } from '@/services/italian-tts';
  *   speakIt('Buongiorno, sono Pierre.');
@@ -19,8 +21,17 @@
 import { createAudioPlayer, type AudioPlayer } from 'expo-audio';
 import * as Speech from 'expo-speech';
 
+import { getExpoApiBaseUrl } from '@/services/api-base-url';
+
 export const ITALIAN_TTS_WORKER_URL =
   process.env.EXPO_PUBLIC_ITALPRO_TTS_URL ?? 'https://italpro-tts.italpro-tts.workers.dev';
+
+const configuredApiUrl =
+  process.env.EXPO_PUBLIC_ITALPRO_API_URL ?? process.env.EXPO_PUBLIC_ITALPRO_AI_URL;
+
+const DEFAULT_DEEPGRAM_F = process.env.EXPO_PUBLIC_DEEPGRAM_TTS_MODEL ?? 'aura-2-livia-it';
+const DEFAULT_DEEPGRAM_M = process.env.EXPO_PUBLIC_DEEPGRAM_TTS_MODEL_M ?? 'aura-2-dionisio-it';
+
 const CACHE_DIR_NAME = 'tts-cache';
 const FETCH_TIMEOUT_MS = 12_000;
 const IS_WEB = process.env.EXPO_OS === 'web';
@@ -32,23 +43,29 @@ export type ItalianVoice =
   | 'it-IT-GiuseppeNeural'  // M · ferme
   | 'it-IT-PalmiraNeural';  // F · douce
 
+/** Edge voices that map to the masculine Deepgram model. */
+const MALE_VOICES = new Set<ItalianVoice>(['it-IT-DiegoNeural', 'it-IT-GiuseppeNeural']);
+
 export type SpeakOptions = {
-  /** Italian neural voice. Default: it-IT-IsabellaNeural. */
+  /** Italian Edge neural voice (used by the Worker tier). Default: it-IT-IsabellaNeural. */
   voice?: ItalianVoice;
-  /** 1.0 = normal, 0.5 = slow, 1.5 = fast. Mapped to ±50% in the worker. */
+  /** Explicit Deepgram Aura-2 model (e.g. aura-2-livia-it). Overrides the voice→model mapping. */
+  deepgramModel?: string;
+  /** 1.0 = normal, 0.5 = slow, 1.5 = fast. Applies to the Worker tier. */
   rate?: number;
-  /** 1.0 = normal pitch. Same scale as rate. */
+  /** 1.0 = normal pitch. Same scale as rate. Applies to the Worker tier. */
   pitch?: number;
-  /** Skip the worker entirely (force device TTS). Useful for debug. */
+  /** Skip the network entirely (force device TTS). Useful for debug. */
   forceLocal?: boolean;
 };
 
 let currentPlayer: AudioPlayer | null = null;
 let workerCooldownUntil = 0;
+let deepgramCooldownUntil = 0;
 const inflight = new Map<string, Promise<string | null>>();
 
 /**
- * Speak Italian text. Prefers neural voice via worker; falls back to expo-speech.
+ * Speak Italian text. Tries Deepgram → Worker → device TTS.
  * Always stops any currently-playing utterance first.
  */
 export async function speakIt(rawText: string, opts: SpeakOptions = {}): Promise<void> {
@@ -57,7 +74,7 @@ export async function speakIt(rawText: string, opts: SpeakOptions = {}): Promise
 
   stopIt();
 
-  if (opts.forceLocal || isCoolingDown()) {
+  if (opts.forceLocal) {
     return playWithDeviceFallback(text, opts);
   }
 
@@ -70,7 +87,6 @@ export async function speakIt(rawText: string, opts: SpeakOptions = {}): Promise
     currentPlayer = player;
     player.play();
   } catch (err) {
-    triggerCooldown();
     console.warn('[italian-tts] neural playback failed → fallback to device TTS', err);
     playWithDeviceFallback(text, opts);
   }
@@ -93,54 +109,101 @@ export function stopIt(): void {
 /** Pre-warm the cache with a list of phrases (e.g. on app launch). Non-blocking. */
 export async function preloadPhrases(phrases: string[], voice?: ItalianVoice): Promise<void> {
   for (const phrase of phrases) {
-    if (isCoolingDown()) return;
     try {
       await getOrFetchAudio(phrase, { voice });
     } catch {
-      triggerCooldown();
       return;
     }
   }
 }
 
-// ─── Internals ──────────────────────────────────────────────────────────────
-
-function playWithDeviceFallback(text: string, opts: SpeakOptions): void {
-  Speech.speak(text, {
-    language: 'it-IT',
-    rate: opts.rate ?? 1,
-    pitch: opts.pitch ?? 1,
-  });
-}
+// ─── Tier orchestration ───────────────────────────────────────────────────────
 
 async function getOrFetchAudio(text: string, opts: SpeakOptions): Promise<string | null> {
-  const voice: ItalianVoice = opts.voice ?? 'it-IT-IsabellaNeural';
-  const ratePct = clampPct(rateToPct(opts.rate));
-  const pitchPct = clampPct(rateToPct(opts.pitch));
+  // Tier 1 — Deepgram (server proxy)
+  const apiBase = getExpoApiBaseUrl(configuredApiUrl);
+  if (apiBase && !isCoolingDown(deepgramCooldownUntil)) {
+    const model = opts.deepgramModel ?? resolveDeepgramModel(opts.voice);
+    const uri = await coalesce(`dg_${model}_${hash(text)}`, () =>
+      fetchDeepgram(apiBase, text, model),
+    );
+    if (uri) return uri;
+    triggerDeepgramCooldown();
+  }
 
-  const key = cacheKey(voice, ratePct, pitchPct, text);
+  // Tier 2 — Cloudflare Worker (Edge Neural)
+  if (!isCoolingDown(workerCooldownUntil)) {
+    const voice: ItalianVoice = opts.voice ?? 'it-IT-IsabellaNeural';
+    const ratePct = clampPct(rateToPct(opts.rate));
+    const pitchPct = clampPct(rateToPct(opts.pitch));
+    const key = workerCacheKey(voice, ratePct, pitchPct, text);
+    const uri = await coalesce(key, () => fetchWorker(text, voice, ratePct, pitchPct, key));
+    if (uri) return uri;
+    triggerWorkerCooldown();
+  }
 
-  // Already cached locally?
-  const cached = await readCachedFile(key);
-  if (cached) return cached;
+  // Tier 3 handled by the caller (device TTS).
+  return null;
+}
 
-  // Coalesce concurrent requests for the same key.
+/** Coalesce concurrent requests for the same cache key. */
+function coalesce(key: string, factory: () => Promise<string | null>): Promise<string | null> {
   const existing = inflight.get(key);
   if (existing) return existing;
-
-  const promise = fetchAndCache(text, voice, ratePct, pitchPct, key)
-    .finally(() => inflight.delete(key));
+  const promise = factory().finally(() => inflight.delete(key));
   inflight.set(key, promise);
   return promise;
 }
 
-async function fetchAndCache(
+function resolveDeepgramModel(voice?: ItalianVoice): string {
+  if (voice && MALE_VOICES.has(voice)) return DEFAULT_DEEPGRAM_M;
+  return DEFAULT_DEEPGRAM_F;
+}
+
+// ─── Tier 1: Deepgram ─────────────────────────────────────────────────────────
+
+async function fetchDeepgram(apiBase: string, text: string, model: string): Promise<string | null> {
+  const key = `dg_${model}_${hash(text)}`;
+  const cached = await readCachedFile(key);
+  if (cached) return cached;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${apiBase}/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, model }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      console.warn(`[italian-tts] deepgram ${res.status}`);
+      return null;
+    }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (buf.length === 0) return null;
+    return writeCachedFile(key, buf);
+  } catch (err) {
+    logFetchError('deepgram', err);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ─── Tier 2: Cloudflare Worker ──────────────────────────────────────────────
+
+async function fetchWorker(
   text: string,
   voice: ItalianVoice,
   rate: number,
   pitch: number,
   key: string,
 ): Promise<string | null> {
+  const cached = await readCachedFile(key);
+  if (cached) return cached;
+
   const url =
     `${ITALIAN_TTS_WORKER_URL}/tts?text=${encodeURIComponent(text)}` +
     `&voice=${voice}` +
@@ -160,16 +223,24 @@ async function fetchAndCache(
     if (buf.length === 0) return null;
     return writeCachedFile(key, buf);
   } catch (err) {
-    if ((err as Error).name === 'AbortError') {
-      console.warn('[italian-tts] worker timeout');
-    } else {
-      console.warn('[italian-tts] worker error', err);
-    }
+    logFetchError('worker', err);
     return null;
   } finally {
     clearTimeout(timer);
   }
 }
+
+// ─── Device fallback ──────────────────────────────────────────────────────────
+
+function playWithDeviceFallback(text: string, opts: SpeakOptions): void {
+  Speech.speak(text, {
+    language: 'it-IT',
+    rate: opts.rate ?? 1,
+    pitch: opts.pitch ?? 1,
+  });
+}
+
+// ─── File cache ───────────────────────────────────────────────────────────────
 
 async function getFileSystem() {
   if (IS_WEB) return null;
@@ -224,6 +295,16 @@ async function writeCachedFile(key: string, bytes: Uint8Array): Promise<string |
   }
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function logFetchError(tier: string, err: unknown): void {
+  if ((err as Error)?.name === 'AbortError') {
+    console.warn(`[italian-tts] ${tier} timeout`);
+  } else {
+    console.warn(`[italian-tts] ${tier} error`, err);
+  }
+}
+
 /** Maps 0.5 → -50, 1.0 → 0, 1.5 → +50. */
 function rateToPct(rate: number | undefined): number {
   if (rate === undefined || Number.isNaN(rate)) return 0;
@@ -235,21 +316,27 @@ function clampPct(n: number): number {
 }
 
 /** Stable, dependency-free 32-bit hash (djb2). Collisions are harmless here. */
-function cacheKey(voice: string, rate: number, pitch: number, text: string): string {
-  const composite = `${voice}|${rate}|${pitch}|${text}`;
+function hash(text: string): string {
   let h = 5381;
-  for (let i = 0; i < composite.length; i++) {
-    h = ((h << 5) + h + composite.charCodeAt(i)) | 0;
+  for (let i = 0; i < text.length; i++) {
+    h = ((h << 5) + h + text.charCodeAt(i)) | 0;
   }
-  const hex = (h >>> 0).toString(16).padStart(8, '0');
-  return `${voice.toLowerCase()}_r${rate}_p${pitch}_${hex}`;
+  return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-function isCoolingDown(): boolean {
-  return Date.now() < workerCooldownUntil;
+function workerCacheKey(voice: string, rate: number, pitch: number, text: string): string {
+  const composite = `${voice}|${rate}|${pitch}|${text}`;
+  return `${voice.toLowerCase()}_r${rate}_p${pitch}_${hash(composite)}`;
 }
 
-function triggerCooldown(): void {
-  // After a failure, give the worker 60 s of quiet before retrying.
+function isCoolingDown(until: number): boolean {
+  return Date.now() < until;
+}
+
+function triggerWorkerCooldown(): void {
   workerCooldownUntil = Date.now() + 60_000;
+}
+
+function triggerDeepgramCooldown(): void {
+  deepgramCooldownUntil = Date.now() + 60_000;
 }

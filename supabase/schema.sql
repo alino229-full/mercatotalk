@@ -52,7 +52,7 @@ create table if not exists public.audio_events (
   owner_id uuid not null references auth.users(id) on delete cascade,
   session_id uuid references public.dialogue_sessions(id) on delete set null,
   message_id uuid references public.dialogue_messages(id) on delete set null,
-  provider text not null check (provider in ('groq-whisper', 'kokoro-tts', 'expo-speech')),
+  provider text not null check (provider in ('groq-whisper', 'deepgram-tts', 'edge-neural-tts', 'expo-speech')),
   direction text not null check (direction in ('stt', 'tts')),
   language text,
   duration_ms integer,
