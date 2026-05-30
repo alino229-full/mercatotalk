@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { findNodeHandle, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn } from 'react-native-reanimated';
@@ -67,10 +67,10 @@ export default function LearnScreen() {
     const target = nodeRefs.current.get(id);
     const content = contentRef.current;
     if (!target || !content) return;
-    const handle = findNodeHandle(content);
-    if (handle == null) return;
+    // New RN architecture (Fabric): measureLayout takes the relative
+    // component instance directly, not a numeric findNodeHandle.
     target.measureLayout(
-      handle,
+      content,
       (_x: number, y: number) => {
         scrollRef.current?.scrollTo({ y: Math.max(0, y - 180), animated });
       },

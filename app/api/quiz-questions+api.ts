@@ -93,6 +93,19 @@ Règles :
       signal: AbortSignal.timeout(15000),
     });
 
+    if (!groqRes.ok) {
+      const detail = await groqRes.text();
+      const isRateLimit = groqRes.status === 429;
+      return Response.json(
+        {
+          error: isRateLimit ? 'Quota Groq quotidien atteint.' : 'Groq a refuse la requete.',
+          rateLimited: isRateLimit,
+          detail,
+        },
+        { status: groqRes.status },
+      );
+    }
+
     const data = (await groqRes.json()) as GroqResponse;
     const raw = data.choices?.[0]?.message?.content ?? '';
 

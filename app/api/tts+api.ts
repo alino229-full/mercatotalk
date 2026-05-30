@@ -64,11 +64,16 @@ export async function POST(request: Request) {
       );
     }
 
-    return new Response(response.body, {
+    // Buffer the audio: streaming response.body directly is not reliably
+    // supported by the Expo Router server runtime and throws a 500.
+    const audio = await response.arrayBuffer();
+
+    return new Response(audio, {
       status: 200,
       headers: {
         ...corsHeaders,
         'Content-Type': 'audio/mpeg',
+        'Content-Length': String(audio.byteLength),
         'Cache-Control': 'no-store',
       },
     });
