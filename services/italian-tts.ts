@@ -59,6 +59,8 @@ export type SpeakOptions = {
   forceLocal?: boolean;
 };
 
+type AudioExt = 'wav' | 'mp3';
+
 let currentPlayer: AudioPlayer | null = null;
 let workerCooldownUntil = 0;
 const inflight = new Map<string, Promise<string | null>>();
@@ -84,11 +86,29 @@ export async function speakIt(rawText: string, opts: SpeakOptions = {}): Promise
     }
     const player = createAudioPlayer({ uri });
     currentPlayer = player;
-    player.play();
+    playWhenReady(player);
   } catch (err) {
     console.warn('[italian-tts] neural playback failed → fallback to device TTS', err);
     playWithDeviceFallback(text, opts);
   }
+}
+
+/**
+ * Play only once the source is loaded. Calling play() immediately on a fresh
+ * player races the decoder: short clips ("pane") play a tiny initial buffer then
+ * stop ("pa"). Waiting for `isLoaded` guarantees the whole clip plays.
+ */
+function playWhenReady(player: AudioPlayer): void {
+  if (player.isLoaded) {
+    player.play();
+    return;
+  }
+  const sub = player.addListener('playbackStatusUpdate', (status) => {
+    if (status.isLoaded && currentPlayer === player) {
+      player.play();
+      sub.remove();
+    }
+  });
 }
 
 /** Stop both the neural player and any device-TTS utterance. */
@@ -119,19 +139,8 @@ export async function preloadPhrases(phrases: string[], voice?: ItalianVoice): P
 // ─── Tier orchestration ───────────────────────────────────────────────────────
 
 async function getOrFetchAudio(text: string, opts: SpeakOptions): Promise<string | null> {
-  // Tier 1 — Deepgram (server proxy). No session cooldown: every phrase retries
-  // Deepgram so a single transient failure never switches the whole quiz to the
-  // Edge voice (which would mix two voices in one session).
-  const apiBase = getExpoApiBaseUrl(configuredApiUrl);
-  if (apiBase) {
-    const model = opts.deepgramModel ?? resolveDeepgramModel(opts.voice);
-    const uri = await coalesce(`dg_${model}_${hash(text)}`, () =>
-      fetchDeepgram(apiBase, text, model),
-    );
-    if (uri) return uri;
-  }
-
-  // Tier 2 — Cloudflare Worker (Edge Neural)
+  // Tier 1 — Cloudflare Worker (Microsoft Edge Neural). Mis en priorite pendant
+  // l'investigation de la troncature WAV cote Deepgram.
   if (!isCoolingDown(workerCooldownUntil)) {
     const voice: ItalianVoice = opts.voice ?? 'it-IT-IsabellaNeural';
     const ratePct = clampPct(rateToPct(opts.rate));
@@ -140,6 +149,16 @@ async function getOrFetchAudio(text: string, opts: SpeakOptions): Promise<string
     const uri = await coalesce(key, () => fetchWorker(text, voice, ratePct, pitchPct, key));
     if (uri) return uri;
     triggerWorkerCooldown();
+  }
+
+  // Tier 2 — Deepgram (server proxy).
+  const apiBase = getExpoApiBaseUrl(configuredApiUrl);
+  if (apiBase) {
+    const model = opts.deepgramModel ?? resolveDeepgramModel(opts.voice);
+    const uri = await coalesce(`dg_${model}_${hash(text)}`, () =>
+      fetchDeepgram(apiBase, text, model),
+    );
+    if (uri) return uri;
   }
 
   // Tier 3 handled by the caller (device TTS).
@@ -164,7 +183,7 @@ function resolveDeepgramModel(voice?: ItalianVoice): string {
 
 async function fetchDeepgram(apiBase: string, text: string, model: string): Promise<string | null> {
   const key = `dg_${model}_${hash(text)}`;
-  const cached = await readCachedFile(key);
+  const cached = await readCachedFile(key, 'wav');
   if (cached) return cached;
 
   // Retry once: transient DNS/network hiccups (EAI_AGAIN) on the proxy host are
@@ -185,7 +204,7 @@ async function fetchDeepgram(apiBase: string, text: string, model: string): Prom
       }
       const buf = new Uint8Array(await res.arrayBuffer());
       if (buf.length === 0) continue;
-      return writeCachedFile(key, buf);
+      return writeCachedFile(key, buf, 'wav');
     } catch (err) {
       logFetchError('deepgram', err);
     } finally {
@@ -204,7 +223,7 @@ async function fetchWorker(
   pitch: number,
   key: string,
 ): Promise<string | null> {
-  const cached = await readCachedFile(key);
+  const cached = await readCachedFile(key, 'mp3');
   if (cached) return cached;
 
   const url =
@@ -224,7 +243,7 @@ async function fetchWorker(
     }
     const buf = new Uint8Array(await res.arrayBuffer());
     if (buf.length === 0) return null;
-    return writeCachedFile(key, buf);
+    return writeCachedFile(key, buf, 'mp3');
   } catch (err) {
     logFetchError('worker', err);
     return null;
@@ -264,30 +283,31 @@ async function cacheDir() {
   return dir;
 }
 
-async function readCachedFile(key: string): Promise<string | null> {
+async function readCachedFile(key: string, ext: AudioExt): Promise<string | null> {
   try {
     const fs = await getFileSystem();
     const dir = await cacheDir();
     if (!fs || !dir) return null;
-    const file = new fs.File(dir, `${key}.mp3`);
+    const file = new fs.File(dir, `${key}.${ext}`);
     return file.exists ? file.uri : null;
   } catch {
     return null;
   }
 }
 
-async function writeCachedFile(key: string, bytes: Uint8Array): Promise<string | null> {
+async function writeCachedFile(key: string, bytes: Uint8Array, ext: AudioExt): Promise<string | null> {
   if (IS_WEB) {
     const arrayBuffer = new ArrayBuffer(bytes.byteLength);
     new Uint8Array(arrayBuffer).set(bytes);
-    return URL.createObjectURL(new Blob([arrayBuffer], { type: 'audio/mpeg' }));
+    const mime = ext === 'wav' ? 'audio/wav' : 'audio/mpeg';
+    return URL.createObjectURL(new Blob([arrayBuffer], { type: mime }));
   }
 
   try {
     const fs = await getFileSystem();
     const dir = await cacheDir();
     if (!fs || !dir) return null;
-    const file = new fs.File(dir, `${key}.mp3`);
+    const file = new fs.File(dir, `${key}.${ext}`);
     if (file.exists) file.delete();
     file.create();
     file.write(bytes);
