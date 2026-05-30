@@ -101,6 +101,49 @@ function cleanMeaning(fr: string): string {
   return fr.split('—')[0]!.split(' - ')[0]!.trim();
 }
 
+/** Removes parenthetical/bracket annotations and trailing notes. */
+function stripAnnotations(value: string): string {
+  return value
+    .replace(/\s*\([^)]*\)/g, '')   // (…)
+    .replace(/\s*\[[^\]]*\]/g, '')  // […]
+    .split('—')[0]!
+    .split(' - ')[0]!;
+}
+
+/**
+ * Italian text to speak / show as the canonical answer: annotations removed and
+ * reduced to the FIRST variant. "adesso / ora" → "adesso", "entro (+ duree)" → "entro".
+ */
+export function speakableIt(it: string): string {
+  return stripAnnotations(it)
+    .split('/')[0]!
+    // Recolle les tirets de syllabification (aide visuelle, pas à prononcer) :
+    // "pa-ne" → "pane", "uni-ver-si-ta'" → "università".
+    .replace(/(\p{L})-(\p{L})/gu, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Every accepted Italian spelling for free typing: each "/" alternative and the
+ * full cleaned form, plus a typographic-apostrophe variant. "adesso / ora"
+ * accepts both "adesso" and "ora".
+ */
+function acceptedItVariants(it: string): string[] {
+  const base = stripAnnotations(it);
+  const variants = new Set<string>();
+  const add = (t: string) => {
+    const v = t.replace(/\s+/g, ' ').trim();
+    if (v) {
+      variants.add(v);
+      variants.add(v.replace(/'/g, '’'));
+    }
+  };
+  for (const part of base.split('/')) add(part);
+  add(base); // also accept the full "adesso / ora" if typed entirely
+  return Array.from(variants);
+}
+
 function isUsable(item: VocabItem): boolean {
   return Boolean(item.it?.trim()) && Boolean(item.fr?.trim());
 }
@@ -175,27 +218,27 @@ export function buildLessonQuiz(lesson: LessonDetail): QuizQuestion[] {
         phonetic: item.phonetic,
         correct,
         choices: shuffle([correct, ...pickDistractors(frPool, correct, 3)]),
-        speakText: it,
+        speakText: speakableIt(it),
       });
     } else if (mod === 1) {
       questions.push({
         id: `${lesson.id}-ls-${index}`,
         type: 'listen',
-        audio: it,
+        audio: speakableIt(it),
         correct,
         choices: shuffle([correct, ...pickDistractors(frPool, correct, 3)]),
-        speakText: it,
+        speakText: speakableIt(it),
       });
     } else {
-      // Harder: free typing with timer. Accept the Italian or French side.
+      // Harder: free typing with timer. Accept every Italian variant.
       questions.push({
         id: `${lesson.id}-ty-${index}`,
         type: 'type',
         prompt: correct,
         phonetic: item.phonetic,
-        accepted: Array.from(new Set([it, it.replace(/'/g, '’')])),
+        accepted: acceptedItVariants(it),
         timerSeconds: 25,
-        speakText: it,
+        speakText: speakableIt(it),
       });
     }
   });
@@ -212,7 +255,7 @@ export function buildLessonQuiz(lesson: LessonDetail): QuizQuestion[] {
         phonetic: item.phonetic,
         correct,
         choices: shuffle([correct, ...pickDistractors(frPool, correct, 3)]),
-        speakText: item.it.trim(),
+        speakText: speakableIt(item.it),
       });
     });
   }

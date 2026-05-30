@@ -64,7 +64,8 @@ Catégories possibles : nombres, conjugaison, verbes, grammaire, phrases, object
 
 Règles :
 - Les items IT et FR doivent être des paires de traduction directe
-- Inclure des phrases B2B complètes (ex: "Le invio il preventivo domani" / "Je vous envoie le devis demain")
+- IMPORTANT : chaque phrase italienne doit être COURTE, maximum 8 mots (idéal 3 à 6 mots). Optimisé pour un petit écran mobile.
+- Préférer des mots seuls et des phrases courtes (ex: "Le invio il preventivo" / "Je vous envoie le devis"). Pas de phrases longues.
 - Couvrir au moins 5 catégories différentes
 - phonetic est optionnel (inclure seulement pour les mots difficiles)
 - explanation est optionnelle mais fortement recommandée pour les phrases B2B, expressions complexes et verbes (fournir une explication utile en français)
@@ -133,9 +134,11 @@ Règles :
       .filter((item): item is { it: string; fr: string; category: string; phonetic?: string; explanation?: string } => {
         if (!item || typeof item !== 'object') return false;
         const o = item as Record<string, unknown>;
-        return typeof o['it'] === 'string' && o['it'].length > 0 &&
-               typeof o['fr'] === 'string' && o['fr'].length > 0 &&
-               typeof o['category'] === 'string';
+        if (typeof o['it'] !== 'string' || o['it'].length === 0) return false;
+        if (typeof o['fr'] !== 'string' || o['fr'].length === 0) return false;
+        if (typeof o['category'] !== 'string') return false;
+        // Rejette les phrases trop longues pour l'affichage mobile (> 8 mots).
+        return o['it'].trim().split(/\s+/).length <= 8;
       })
       .map((item, idx) => ({
         id: `groq-${Date.now()}-${idx}`,

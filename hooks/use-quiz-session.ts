@@ -122,6 +122,34 @@ function cleanQuizText(value: string): string {
 }
 
 /**
+ * Texte à prononcer : nettoyé puis réduit à la PREMIÈRE variante.
+ * On ne lit jamais "adesso / ora" ni "(+ duree)" à voix haute.
+ */
+function speakableText(value: string): string {
+  return cleanQuizText(value)
+    .split('/')[0]!
+    // Recolle les tirets de syllabification ("pa-ne" → "pane") pour ne pas
+    // lire syllabe par syllabe ni couper le mot.
+    .replace(/(\p{L})-(\p{L})/gu, '$1$2')
+    .trim();
+}
+
+/**
+ * Variantes acceptées en saisie libre : chaque alternative séparée par "/",
+ * plus la chaîne complète nettoyée. Ex: "adesso / ora" → {"adesso", "ora", "adesso / ora"}.
+ */
+function acceptedAnswers(label: string): Set<string> {
+  const variants = new Set<string>();
+  const full = normalizeAnswer(label);
+  if (full) variants.add(full);
+  for (const part of label.split('/')) {
+    const n = normalizeAnswer(part);
+    if (n) variants.add(n);
+  }
+  return variants;
+}
+
+/**
  * Sélectionne 3 distracteurs cohérents : d'abord dans la MÊME catégorie
  * (questions plus crédibles), puis complète avec d'autres si besoin.
  */
@@ -304,7 +332,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
       setTimeLeft(QUESTION_TIME_SECONDS);
       const nextQ = questionsRef.current[next];
       if (nextQ?.type === 'listen_to_fr' || nextQ?.type === 'dictation') {
-        setTimeout(() => { void speakIt(nextQ.prompt, { rate: 0.82 }); }, 200);
+        setTimeout(() => { void speakIt(speakableText(nextQ.prompt), { rate: 0.82 }); }, 200);
       }
     }
   }, []);
@@ -353,7 +381,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
 
       if (!correct) {
         stopIt();
-        setTimeout(() => { void speakIt(q.it, { rate: 0.78 }); }, 300);
+        setTimeout(() => { void speakIt(speakableText(q.it), { rate: 0.78 }); }, 300);
       }
 
       clearTimer();
@@ -371,7 +399,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
       if (!q) return;
       const normalized = normalizeAnswer(text);
       const correctChoice = q.choices.find((c) => c.id === q.correctId);
-      const isCorrect = correctChoice ? normalizeAnswer(correctChoice.label) === normalized : false;
+      const isCorrect = correctChoice ? acceptedAnswers(correctChoice.label).has(normalized) : false;
       selectChoice(isCorrect ? q.correctId : '__typed_wrong__');
     },
     [selectChoice],
@@ -465,7 +493,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     if (!hasStarted || isPaused) return;
     const q = questionsRef.current[indexRef.current];
     if (!q) return;
-    void speakIt(q.it, { rate: 0.82, pitch: 1 });
+    void speakIt(speakableText(q.it), { rate: 0.82, pitch: 1 });
   }, [hasStarted, isPaused]);
 
   const startSession = useCallback(() => {
@@ -475,7 +503,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     sessionStart.current = Date.now();
     const q = questionsRef.current[indexRef.current];
     if (q?.type === 'listen_to_fr' || q?.type === 'dictation') {
-      setTimeout(() => { void speakIt(q.prompt, { rate: 0.82 }); }, 180);
+      setTimeout(() => { void speakIt(speakableText(q.prompt), { rate: 0.82 }); }, 180);
     }
   }, []);
 

@@ -25,6 +25,7 @@ import { useItalianTTS } from '@/hooks/use-italian-tts';
 import { successFeedback, warningFeedback } from '@/services/haptics';
 import {
   normaliseAnswer,
+  speakableIt,
   type BuildQuestion,
   type ListenQuestion,
   type MatchQuestion,
@@ -231,7 +232,7 @@ function TranslateView({
   return (
     <View style={styles.body}>
       <Text style={styles.instruction}>Traduis ce mot</Text>
-      <Pressable onPress={() => tts.speak(q.prompt, { rate: 0.85 })} style={styles.promptCard}>
+      <Pressable onPress={() => tts.speak(q.speakText ?? speakableIt(q.prompt), { rate: 0.85 })} style={styles.promptCard}>
         <Text style={styles.promptBig}>{q.prompt}</Text>
         {q.phonetic ? <Text style={styles.promptPhonetic}>{q.phonetic}</Text> : null}
         <Text style={[styles.listenHint, { color: accentColor }]}>▶ écouter</Text>
@@ -359,7 +360,7 @@ function MatchView({
       if (matched.has(key)) return;
       setSelectedIt(key);
       setErrorKey(null);
-      tts.speak(text, { rate: 0.85 });
+      tts.speak(speakableIt(text), { rate: 0.85 });
     },
     [matched, tts],
   );

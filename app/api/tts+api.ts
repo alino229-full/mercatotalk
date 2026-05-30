@@ -11,12 +11,31 @@ const corsHeaders = {
 };
 
 const DEEPGRAM_SPEAK_URL = 'https://api.deepgram.com/v1/speak';
-const DEFAULT_MODEL = 'aura-2-livia-it';
+const DEFAULT_MODEL = 'aura-2-cesare-it';
 // Deepgram caps Aura requests at 2000 characters per call.
 const MAX_CHARS = 2000;
 
 export function OPTIONS() {
   return new Response(null, { headers: corsHeaders });
+}
+
+/**
+ * fetch() with retries on transient network errors (DNS EAI_AGAIN, ECONNRESET,
+ * fetch failed). Deepgram itself is reliable; the flakiness comes from the host
+ * DNS resolver. A short retry turns most intermittent failures into success.
+ */
+async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Promise<Response> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fetch(url, init);
+    } catch (err) {
+      lastError = err;
+      // Backoff: 150ms, 400ms before the next try.
+      await new Promise((r) => setTimeout(r, i === 0 ? 150 : 400));
+    }
+  }
+  throw lastError;
 }
 
 export async function POST(request: Request) {
@@ -47,7 +66,7 @@ export async function POST(request: Request) {
     const model = body.model ?? process.env.DEEPGRAM_TTS_MODEL ?? DEFAULT_MODEL;
     const url = `${DEEPGRAM_SPEAK_URL}?model=${encodeURIComponent(model)}&encoding=mp3`;
 
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       method: 'POST',
       headers: {
         Authorization: `Token ${apiKey}`,

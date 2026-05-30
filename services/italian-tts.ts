@@ -29,8 +29,8 @@ export const ITALIAN_TTS_WORKER_URL =
 const configuredApiUrl =
   process.env.EXPO_PUBLIC_ITALPRO_API_URL ?? process.env.EXPO_PUBLIC_ITALPRO_AI_URL;
 
-const DEFAULT_DEEPGRAM_F = process.env.EXPO_PUBLIC_DEEPGRAM_TTS_MODEL ?? 'aura-2-livia-it';
-const DEFAULT_DEEPGRAM_M = process.env.EXPO_PUBLIC_DEEPGRAM_TTS_MODEL_M ?? 'aura-2-dionisio-it';
+const DEFAULT_DEEPGRAM_F = process.env.EXPO_PUBLIC_DEEPGRAM_TTS_MODEL ?? 'aura-2-cesare-it';
+const DEFAULT_DEEPGRAM_M = process.env.EXPO_PUBLIC_DEEPGRAM_TTS_MODEL_M ?? 'aura-2-cesare-it';
 
 const CACHE_DIR_NAME = 'tts-cache';
 const FETCH_TIMEOUT_MS = 12_000;
@@ -61,7 +61,6 @@ export type SpeakOptions = {
 
 let currentPlayer: AudioPlayer | null = null;
 let workerCooldownUntil = 0;
-let deepgramCooldownUntil = 0;
 const inflight = new Map<string, Promise<string | null>>();
 
 /**
@@ -120,15 +119,16 @@ export async function preloadPhrases(phrases: string[], voice?: ItalianVoice): P
 // ─── Tier orchestration ───────────────────────────────────────────────────────
 
 async function getOrFetchAudio(text: string, opts: SpeakOptions): Promise<string | null> {
-  // Tier 1 — Deepgram (server proxy)
+  // Tier 1 — Deepgram (server proxy). No session cooldown: every phrase retries
+  // Deepgram so a single transient failure never switches the whole quiz to the
+  // Edge voice (which would mix two voices in one session).
   const apiBase = getExpoApiBaseUrl(configuredApiUrl);
-  if (apiBase && !isCoolingDown(deepgramCooldownUntil)) {
+  if (apiBase) {
     const model = opts.deepgramModel ?? resolveDeepgramModel(opts.voice);
     const uri = await coalesce(`dg_${model}_${hash(text)}`, () =>
       fetchDeepgram(apiBase, text, model),
     );
     if (uri) return uri;
-    triggerDeepgramCooldown();
   }
 
   // Tier 2 — Cloudflare Worker (Edge Neural)
@@ -167,29 +167,32 @@ async function fetchDeepgram(apiBase: string, text: string, model: string): Prom
   const cached = await readCachedFile(key);
   if (cached) return cached;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-  try {
-    const res = await fetch(`${apiBase}/tts`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, model }),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      console.warn(`[italian-tts] deepgram ${res.status}`);
-      return null;
+  // Retry once: transient DNS/network hiccups (EAI_AGAIN) on the proxy host are
+  // the usual cause of a failed call, and a second attempt almost always works.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${apiBase}/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, model }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        console.warn(`[italian-tts] deepgram ${res.status} (try ${attempt + 1})`);
+        continue;
+      }
+      const buf = new Uint8Array(await res.arrayBuffer());
+      if (buf.length === 0) continue;
+      return writeCachedFile(key, buf);
+    } catch (err) {
+      logFetchError('deepgram', err);
+    } finally {
+      clearTimeout(timer);
     }
-    const buf = new Uint8Array(await res.arrayBuffer());
-    if (buf.length === 0) return null;
-    return writeCachedFile(key, buf);
-  } catch (err) {
-    logFetchError('deepgram', err);
-    return null;
-  } finally {
-    clearTimeout(timer);
   }
+  return null;
 }
 
 // ─── Tier 2: Cloudflare Worker ──────────────────────────────────────────────
@@ -335,8 +338,4 @@ function isCoolingDown(until: number): boolean {
 
 function triggerWorkerCooldown(): void {
   workerCooldownUntil = Date.now() + 60_000;
-}
-
-function triggerDeepgramCooldown(): void {
-  deepgramCooldownUntil = Date.now() + 60_000;
 }

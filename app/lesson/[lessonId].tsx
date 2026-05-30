@@ -23,7 +23,7 @@ import {
 } from '@/database/italpro-local-db';
 import { useItalianTTS } from '@/hooks/use-italian-tts';
 import { useVoiceRecorder } from '@/hooks/use-voice-recorder';
-import { buildLessonQuiz } from '@/services/lesson-quiz-builder';
+import { buildLessonQuiz, speakableIt } from '@/services/lesson-quiz-builder';
 import { successFeedback, warningFeedback } from '@/services/haptics';
 import { hasSpeechProxy } from '@/services/speech-ai-client';
 import { transcribeLocalAudio } from '@/services/transcription-client';
@@ -208,7 +208,7 @@ function VocabCard({
 }) {
   return (
     <View style={styles.vocabCard}>
-      <Pressable onPress={() => onSpeak(item.it)} style={styles.vocabMain}>
+      <Pressable onPress={() => onSpeak(speakableIt(item.it))} style={styles.vocabMain}>
         <View style={{ flex: 1 }}>
           <Text style={styles.vocabIt}>{item.it}</Text>
           {item.phonetic ? <Text style={styles.vocabPhonetic}>{item.phonetic}</Text> : null}
@@ -219,7 +219,7 @@ function VocabCard({
           <Text style={[styles.playIcon, { color: accent }]}>▶</Text>
         </View>
       </Pressable>
-      <PronounceButton word={item.it} accent={accent} />
+      <PronounceButton word={speakableIt(item.it)} accent={accent} />
     </View>
   );
 }
