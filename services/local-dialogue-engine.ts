@@ -47,6 +47,34 @@ const grammarIndicators = [
   /\bgrazie\b/i,
 ];
 
+// ─── Shared topic classifier ───────────────────────────────────────────────
+//
+// Maps any dialogue text (a client question or a learner reply) to a coarse
+// B2B topic. Used as a cache key so AI-generated questions and reply options can
+// be reused offline in a coherent context.
+export function classifyDialogueTopic(text: string): string {
+  const t = text.toLowerCase();
+  if (/chi (è|sei|parla)|non (la|ti) conosco|chi siete|che azienda/.test(t)) return 'identification';
+  if (/pronto\?|chi è\?|cosa vuole|non (la|ti) (conosco|conosc)/.test(t)) return 'cold_open';
+  if (/(inverno|freddo|caldo|resta caldo|riscald|bello solo in foto|hiver|chaud|froid)/.test(t)) return 'winter_comfort';
+  if (/truffat|arnaque|truffe|garanzie serie|fidarsi|sicuro che non|come faccio a sapere|affidabil|fiable/.test(t)) return 'trust';
+  if (/(quanto|costo|prezzo|budget|spend|cher|prix|coût|euro|cost)/.test(t)) {
+    if (/(trop.*cher|troppo.*car|non posso|eccede|non ho|beyond|dépasse)/.test(t)) return 'objection_price';
+    return 'price';
+  }
+  if (/(sconto|remise|riduzion|rabais|abbass|réduct|discount)/.test(t)) return 'discount';
+  if (/(consegna|quando.*arriv|livraison|tempi|délai|quando.*avr|entro quando)/.test(t)) return 'delivery';
+  if (/(certif|garanzi|qualit|norme|haccp|atp|iicl|standard|conform)/.test(t)) return 'quality';
+  if (/(disponibil|avete|stock|l'avete|ce l'avez|en stock)/.test(t)) return 'availability';
+  if (/(concorrent|altro.*fornitore|confronto|concurrent|altri prezzi|compare)/.test(t)) return 'competitor';
+  if (/(permesso|autorizzazione|cila|permis|bureaucrazia|réglementation|costruire)/.test(t)) return 'regulation';
+  if (/(installaz|fondament|raccordo|installation|fondation|montage|pose)/.test(t)) return 'installation';
+  if (/(filtraz|corrente|pompa|kw|tecnico|scheda tecnica|specifiche|technique|dimension)/.test(t)) return 'technical';
+  if (/(rimorchio|remorque|mobile|itinerant|spostare|deplacer|patente)/.test(t)) return 'mobile';
+  if (/(d'accordo|capito|andiamo avanti|procediamo|firmar|accord|décider)/.test(t)) return 'closing';
+  return 'generic';
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function hasAny(text: string, words: string[]): boolean {

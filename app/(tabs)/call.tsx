@@ -18,7 +18,9 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { b2bMoods, type B2BMood } from '@/data/b2b-operational';
 import {
   addXp,
+  getCachedGuidedChoiceSets,
   getLearningSessionCountByType,
+  insertCachedGuidedChoices,
   insertLearningSession,
   saveCallReplay,
   unlockAchievement,
@@ -31,7 +33,7 @@ import { useItalianTTS } from '@/hooks/use-italian-tts';
 import { useVoiceRecorder } from '@/hooks/use-voice-recorder';
 import { successFeedback, tapFeedback } from '@/services/haptics';
 import { requestGuidedReplyChoices, type GuidedReplyChoice } from '@/services/guided-choices-ai-client';
-import type { GuidedChoiceQuality } from '@/services/local-dialogue-engine';
+import { classifyDialogueTopic, type GuidedChoiceQuality } from '@/services/local-dialogue-engine';
 import { hasSpeechProxy } from '@/services/speech-ai-client';
 import { transcribeLocalAudio } from '@/services/transcription-client';
 import { useCallSessionStore } from '@/stores/call-session-store';
@@ -328,14 +330,43 @@ export default function CallScreen() {
     setAiGuidedHints(null);
     setIsLoadingGuidedHints(true);
 
+    const topic = classifyDialogueTopic(
+      `${latestClientMessage.contentIt} ${latestClientMessage.contentFr}`,
+    );
+
     requestGuidedReplyChoices({
       scenario: activeScenario,
       latestClientMessage,
       history: messages,
       mood,
     })
-      .then((choices) => {
-        if (!cancelled) setAiGuidedHints(choices);
+      .then(async (choices) => {
+        if (choices) {
+          // AI succeeded: cache the option set for offline reuse.
+          await insertCachedGuidedChoices({
+            scenarioId: activeScenario.id,
+            mood,
+            topic,
+            choicesJson: JSON.stringify(choices),
+          }).catch(() => null);
+          if (!cancelled) setAiGuidedHints(choices);
+          return;
+        }
+        // AI unavailable: reuse a previously cached AI option set for this topic
+        // (richer than the static hints) before falling back to static.
+        const sets = await getCachedGuidedChoiceSets(activeScenario.id, mood, topic).catch(() => []);
+        if (!cancelled) {
+          if (sets.length > 0) {
+            try {
+              const pick = JSON.parse(sets[Math.floor(Math.random() * sets.length)]!) as GuidedReplyChoice[];
+              setAiGuidedHints(pick);
+            } catch {
+              setAiGuidedHints(null);
+            }
+          } else {
+            setAiGuidedHints(null);
+          }
+        }
       })
       .catch(() => {
         if (!cancelled) setAiGuidedHints(null);
@@ -373,7 +404,7 @@ export default function CallScreen() {
 
     const timeoutId = setTimeout(() => {
       lastSpokenClientMessageId.current = latestClientMessage.id;
-      tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed });
+      tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed, preferDeepgram: true });
     }, 1200);
 
     return () => clearTimeout(timeoutId);
@@ -405,7 +436,7 @@ export default function CallScreen() {
     setXpAwarded(false);
     if (latestClientMessage) {
       lastSpokenClientMessageId.current = latestClientMessage.id;
-      tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed });
+      tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed, preferDeepgram: true });
     }
   }, [clientSpeed, latestClientMessage, tts]);
 

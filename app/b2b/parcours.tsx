@@ -103,7 +103,7 @@ export default function ParcoursScreen() {
           <Text selectable style={styles.newsBody}>{dailyB2BNews.it}</Text>
           <View style={styles.keywordRow}>
             {dailyB2BNews.keywords.map((word) => (
-              <Pressable key={word} accessibilityRole="button" accessibilityLabel={`Ecouter ${word}`} onPress={() => speakIt(word)} style={styles.keyword}>
+              <Pressable key={word} accessibilityRole="button" accessibilityLabel={`Ecouter ${word}`} onPress={() => speakIt(word, { preferDeepgram: true })} style={styles.keyword}>
                 <Text style={styles.keywordText}>{word}</Text>
               </Pressable>
             ))}

@@ -127,10 +127,12 @@ function cleanQuizText(value: string): string {
  */
 function speakableText(value: string): string {
   return cleanQuizText(value)
-    .split('/')[0]!
-    // Recolle les tirets de syllabification ("pa-ne" → "pane") pour ne pas
-    // lire syllabe par syllabe ni couper le mot.
+    // "a / b" → "a, b" : lit les deux variantes avec une courte pause, sans
+    // prononcer le slash.
+    .replace(/\s*\/\s*/g, ', ')
+    // Recolle les tirets de syllabification ("pa-ne" → "pane").
     .replace(/(\p{L})-(\p{L})/gu, '$1$2')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 

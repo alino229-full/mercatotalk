@@ -57,6 +57,12 @@ export type SpeakOptions = {
   pitch?: number;
   /** Skip the network entirely (force device TTS). Useful for debug. */
   forceLocal?: boolean;
+  /**
+   * Try Deepgram first, Worker Edge as fallback. Recommended for long phrases
+   * (B2B dialogue) where Deepgram shines. Default order (Worker first) suits the
+   * short words of quizzes/lessons where Deepgram currently truncates.
+   */
+  preferDeepgram?: boolean;
 };
 
 type AudioExt = 'wav' | 'mp3';
@@ -139,30 +145,41 @@ export async function preloadPhrases(phrases: string[], voice?: ItalianVoice): P
 // ─── Tier orchestration ───────────────────────────────────────────────────────
 
 async function getOrFetchAudio(text: string, opts: SpeakOptions): Promise<string | null> {
-  // Tier 1 — Cloudflare Worker (Microsoft Edge Neural). Mis en priorite pendant
-  // l'investigation de la troncature WAV cote Deepgram.
-  if (!isCoolingDown(workerCooldownUntil)) {
-    const voice: ItalianVoice = opts.voice ?? 'it-IT-IsabellaNeural';
-    const ratePct = clampPct(rateToPct(opts.rate));
-    const pitchPct = clampPct(rateToPct(opts.pitch));
-    const key = workerCacheKey(voice, ratePct, pitchPct, text);
-    const uri = await coalesce(key, () => fetchWorker(text, voice, ratePct, pitchPct, key));
-    if (uri) return uri;
-    triggerWorkerCooldown();
-  }
+  // Order the two neural providers per call:
+  //  - B2B long phrases  → Deepgram first (opts.preferDeepgram), Worker fallback.
+  //  - Quiz/lesson words → Worker first (default), Deepgram fallback.
+  // Either way, if the Worker hits its rate limit the chain falls through to the
+  // other provider, then to device TTS in the caller.
+  const providers = opts.preferDeepgram
+    ? [tryDeepgram, tryWorker]
+    : [tryWorker, tryDeepgram];
 
-  // Tier 2 — Deepgram (server proxy).
-  const apiBase = getExpoApiBaseUrl(configuredApiUrl);
-  if (apiBase) {
-    const model = opts.deepgramModel ?? resolveDeepgramModel(opts.voice);
-    const uri = await coalesce(`dg_${model}_${hash(text)}`, () =>
-      fetchDeepgram(apiBase, text, model),
-    );
+  for (const provider of providers) {
+    const uri = await provider(text, opts);
     if (uri) return uri;
   }
 
-  // Tier 3 handled by the caller (device TTS).
+  // Device TTS handled by the caller.
   return null;
+}
+
+async function tryWorker(text: string, opts: SpeakOptions): Promise<string | null> {
+  if (isCoolingDown(workerCooldownUntil)) return null;
+  const voice: ItalianVoice = opts.voice ?? 'it-IT-IsabellaNeural';
+  const ratePct = clampPct(rateToPct(opts.rate));
+  const pitchPct = clampPct(rateToPct(opts.pitch));
+  const key = workerCacheKey(voice, ratePct, pitchPct, text);
+  const uri = await coalesce(key, () => fetchWorker(text, voice, ratePct, pitchPct, key));
+  if (uri) return uri;
+  triggerWorkerCooldown();
+  return null;
+}
+
+async function tryDeepgram(text: string, opts: SpeakOptions): Promise<string | null> {
+  const apiBase = getExpoApiBaseUrl(configuredApiUrl);
+  if (!apiBase) return null;
+  const model = opts.deepgramModel ?? resolveDeepgramModel(opts.voice);
+  return coalesce(`dg_${model}_${hash(text)}`, () => fetchDeepgram(apiBase, text, model));
 }
 
 /** Coalesce concurrent requests for the same cache key. */

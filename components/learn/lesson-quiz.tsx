@@ -67,6 +67,16 @@ export function LessonQuiz({ questions, accentColor, onComplete, onAbort }: Prop
   const total = questions.length;
   const current = questions[index];
   const progress = useSharedValue(0);
+  const mounted = useRef(true);
+  const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (advanceTimer.current) clearTimeout(advanceTimer.current);
+    };
+  }, []);
 
   useEffect(() => {
     progress.value = withTiming(total === 0 ? 0 : index / total, { duration: 400 });
@@ -75,7 +85,9 @@ export function LessonQuiz({ questions, accentColor, onComplete, onAbort }: Prop
   const handleResult = useCallback(
     (isCorrect: boolean) => {
       const nextCorrect = correctCount + (isCorrect ? 1 : 0);
-      setTimeout(() => {
+      if (advanceTimer.current) clearTimeout(advanceTimer.current);
+      advanceTimer.current = setTimeout(() => {
+        if (!mounted.current) return;
         if (index + 1 >= total) {
           progress.value = withTiming(1, { duration: 400 });
           setCorrectCount(nextCorrect);
@@ -612,7 +624,11 @@ function TypeView({
       </View>
       <View style={styles.promptCard}>
         <Text style={styles.promptBig}>{q.prompt}</Text>
-        {q.phonetic ? <Text style={styles.promptPhonetic}>{q.phonetic}</Text> : null}
+        {/* Phonétique révélée seulement après réponse : avant, elle donnerait
+            la prononciation (donc la réponse) du mot italien à écrire. */}
+        {checked !== 'idle' && q.phonetic ? (
+          <Text style={styles.promptPhonetic}>{q.phonetic}</Text>
+        ) : null}
       </View>
       <TextInput
         value={value}

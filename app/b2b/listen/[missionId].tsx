@@ -116,7 +116,7 @@ function ListenContent({ mission }: { mission: B2BMission }) {
     setListenChoiceId(null);
     setWordHighlight(0);
     setListenPlayed(true);
-    speakIt(listenQuestion.audioIt, { rate: 0.88 });
+    speakIt(listenQuestion.audioIt, { rate: 0.88, preferDeepgram: true });
     let cumulative = 0;
     listenWords.forEach((word, i) => {
       const dur = Math.max(320, word.replace(/\W/g, '').length * 92) / 0.88;

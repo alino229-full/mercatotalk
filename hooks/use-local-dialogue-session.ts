@@ -7,16 +7,23 @@ import {
   ensureConversationStarted,
   getCorrectionsForScenario,
   getLatestCorrection,
+  getCachedClientReplies,
   getMessages,
   getScenarioById,
   getScenarios,
+  insertCachedClientReply,
   insertCorrection,
   insertMessage,
   resetConversation,
   type ScenarioRow,
 } from '@/database/italpro-local-db';
 import { requestDialogueAiTurn } from '@/services/dialogue-ai-client';
-import { buildLocalClientReply, buildLocalCorrection, type GuidedChoiceQuality } from '@/services/local-dialogue-engine';
+import {
+  buildLocalClientReply,
+  buildLocalCorrection,
+  classifyDialogueTopic,
+  type GuidedChoiceQuality,
+} from '@/services/local-dialogue-engine';
 import { useCallSessionStore } from '@/stores/call-session-store';
 
 export type LocalDialogueSession = {
@@ -122,15 +129,41 @@ export function useLocalDialogueSession(): LocalDialogueSession {
           nextFocus: correction.nextFocus,
         });
         await addFocusCardsFromCorrection(correctionRow).catch(() => null);
-        const clientReply =
-          remoteTurn?.clientReply ??
-          buildLocalClientReply({
-            scenario: activeScenario,
-            learnerReply: cleanReply,
-            history: currentMessages,
+
+        // Cache the AI client question for offline reuse, indexed by the topic
+        // the learner raised so it stays coherent when replayed later.
+        const topic = classifyDialogueTopic(cleanReply);
+        let clientReply = remoteTurn?.clientReply ?? null;
+        if (clientReply) {
+          await insertCachedClientReply({
+            scenarioId: activeScenario.id,
             mood,
-            guidedChoiceQuality,
-          });
+            topic,
+            contentIt: clientReply.contentIt,
+            contentFr: clientReply.contentFr,
+            coachingNote: clientReply.coachingNote,
+          }).catch(() => null);
+        } else {
+          // AI unavailable: prefer a previously cached AI question for this
+          // topic (richer/varied) before the static local bank.
+          const cached = await getCachedClientReplies(activeScenario.id, mood, topic).catch(() => []);
+          if (cached.length > 0) {
+            const pick = cached[Math.floor(Math.random() * cached.length)]!;
+            clientReply = {
+              contentIt: pick.contentIt,
+              contentFr: pick.contentFr,
+              coachingNote: pick.coachingNote ?? '',
+            };
+          } else {
+            clientReply = buildLocalClientReply({
+              scenario: activeScenario,
+              learnerReply: cleanReply,
+              history: currentMessages,
+              mood,
+              guidedChoiceQuality,
+            });
+          }
+        }
         await insertMessage({
           scenarioId: activeScenario.id,
           role: 'client',

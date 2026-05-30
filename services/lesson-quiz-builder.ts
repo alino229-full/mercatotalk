@@ -116,7 +116,9 @@ function stripAnnotations(value: string): string {
  */
 export function speakableIt(it: string): string {
   return stripAnnotations(it)
-    .split('/')[0]!
+    // "a / b" → "a, b" : lit les deux variantes avec une courte pause, sans
+    // prononcer le slash.
+    .replace(/\s*\/\s*/g, ', ')
     // Recolle les tirets de syllabification (aide visuelle, pas à prononcer) :
     // "pa-ne" → "pane", "uni-ver-si-ta'" → "università".
     .replace(/(\p{L})-(\p{L})/gu, '$1$2')

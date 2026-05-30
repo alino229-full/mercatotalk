@@ -89,7 +89,7 @@ function DrillContent({ mission }: { mission: B2BMission }) {
   const playDrill = useCallback(() => {
     void tapFeedback();
     setPlaying(true);
-    speakIt(drillItem.spoken, { rate: 0.84 });
+    speakIt(drillItem.spoken, { rate: 0.84, preferDeepgram: true });
     setTimeout(() => setPlaying(false), 1600);
   }, [drillItem.spoken]);
 
@@ -99,7 +99,7 @@ function DrillContent({ mission }: { mission: B2BMission }) {
     setDrillAnswer('');
     setDrillFeedback(null);
     setPlaying(true);
-    setTimeout(() => { speakIt(next.spoken, { rate: 0.84 }); setTimeout(() => setPlaying(false), 1600); }, 140);
+    setTimeout(() => { speakIt(next.spoken, { rate: 0.84, preferDeepgram: true }); setTimeout(() => setPlaying(false), 1600); }, 140);
   }, []);
 
   const changeMode = useCallback((mode: NumberDrillMode) => {
