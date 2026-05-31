@@ -1,4 +1,4 @@
-import { Stack, router } from 'expo-router';
+import { Stack, router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
   Pressable,
@@ -8,7 +8,6 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { cultureCards, dailyB2BNews, roadmap120 } from '@/data/b2b-operational';

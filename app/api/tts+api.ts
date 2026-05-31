@@ -1,7 +1,14 @@
+import { getServerEnv } from '@/services/server-env';
+
 type TtsRequest = {
   text?: string;
+  provider?: 'deepgram' | 'elevenlabs';
   /** Deepgram voice model, e.g. aura-2-livia-it. */
   model?: string;
+  /** ElevenLabs voice id. If omitted, server env is used. */
+  voiceId?: string;
+  /** ElevenLabs model id, e.g. eleven_multilingual_v2. */
+  modelId?: string;
 };
 
 const corsHeaders = {
@@ -11,7 +18,11 @@ const corsHeaders = {
 };
 
 const DEEPGRAM_SPEAK_URL = 'https://api.deepgram.com/v1/speak';
+const ELEVENLABS_SPEAK_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 const DEFAULT_MODEL = 'aura-2-cesare-it';
+const DEFAULT_ELEVENLABS_MODEL = 'eleven_multilingual_v2';
+const ITALIAN_MODEL_RE = /^aura-2-[a-z0-9-]+-it$/i;
+const ELEVENLABS_ID_RE = /^[a-zA-Z0-9_-]{8,80}$/;
 // Deepgram caps Aura requests at 2000 characters per call.
 const MAX_CHARS = 2000;
 
@@ -74,15 +85,6 @@ async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Pro
 
 export async function POST(request: Request) {
   try {
-    const apiKey = process.env.DEEPGRAM_API_KEY;
-
-    if (!apiKey) {
-      return Response.json(
-        { error: 'DEEPGRAM_API_KEY manquant cote serveur.' },
-        { status: 503, headers: corsHeaders },
-      );
-    }
-
     const body = (await request.json()) as TtsRequest;
     const text = body.text?.trim();
 
@@ -97,47 +99,141 @@ export async function POST(request: Request) {
       );
     }
 
-    const model = body.model ?? process.env.DEEPGRAM_TTS_MODEL ?? DEFAULT_MODEL;
-    // WAV (RIFF + explicit length) plays fully on expo-audio. The `mp3` encoding
-    // returns raw ADTS frames with no duration header, which truncates short
-    // clips on Android (reads "pa" of "pane" then stops).
-    const url =
-      `${DEEPGRAM_SPEAK_URL}?model=${encodeURIComponent(model)}` +
-      `&encoding=linear16&sample_rate=24000&container=wav`;
-
-    const response = await fetchWithRetry(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Token ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ text }),
-    });
-
-    if (!response.ok) {
-      const detail = await response.text();
-      return Response.json(
-        { error: 'Deepgram TTS a refuse la requete.', detail },
-        { status: response.status, headers: corsHeaders },
-      );
+    if (body.provider === 'elevenlabs') {
+      return fetchElevenLabsSpeech(text, body);
     }
 
-    // Buffer the audio: streaming response.body directly is not reliably
-    // supported by the Expo Router server runtime and throws a 500.
-    const audio = fixWavHeader(await response.arrayBuffer());
-
-    return new Response(audio, {
-      status: 200,
-      headers: {
-        ...corsHeaders,
-        'Content-Type': 'audio/wav',
-        'Cache-Control': 'no-store',
-      },
-    });
+    return fetchDeepgramSpeech(text, body);
   } catch (error) {
     return Response.json(
       { error: 'Erreur serveur tts.', detail: error instanceof Error ? error.message : 'Erreur inconnue' },
       { status: 500, headers: corsHeaders },
     );
   }
+}
+
+async function fetchDeepgramSpeech(text: string, body: TtsRequest): Promise<Response> {
+  const apiKey = getServerEnv('DEEPGRAM_API_KEY');
+
+  if (!apiKey) {
+    return Response.json(
+      { error: 'DEEPGRAM_API_KEY manquant cote serveur.' },
+      { status: 503, headers: corsHeaders },
+    );
+  }
+
+  const model = normalizeItalianModel(body.model ?? getServerEnv('DEEPGRAM_TTS_MODEL') ?? DEFAULT_MODEL);
+  // WAV (RIFF + explicit length) plays fully on expo-audio. The `mp3` encoding
+  // returns raw ADTS frames with no duration header, which truncates short
+  // clips on Android (reads "pa" of "pane" then stops).
+  const url =
+    `${DEEPGRAM_SPEAK_URL}?model=${encodeURIComponent(model)}` +
+    `&encoding=linear16&sample_rate=24000&container=wav`;
+
+  const response = await fetchWithRetry(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Token ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ text }),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    return Response.json(
+      { error: 'Deepgram TTS a refuse la requete.', detail },
+      { status: response.status, headers: corsHeaders },
+    );
+  }
+
+  // Buffer the audio: streaming response.body directly is not reliably
+  // supported by the Expo Router server runtime and throws a 500.
+  const audio = fixWavHeader(await response.arrayBuffer());
+
+  return new Response(audio, {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'audio/wav',
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+async function fetchElevenLabsSpeech(text: string, body: TtsRequest): Promise<Response> {
+  const apiKey = getServerEnv('ELEVENLABS_API_KEY', 'ELEVEN_LABS_API_KEY');
+  const voiceId = normalizeElevenLabsId(
+    body.voiceId ??
+      getServerEnv(
+        'ELEVENLABS_CALL_VOICE_ID',
+        'ELEVENLABS_MACLY_VOICE_ID',
+        'ELEVENLABS_VOICE_MACLY_ID',
+        'MACLY_ELEVENLABS_VOICE_ID',
+        'ELEVENLABS_VOICE_ID',
+        'ELEVEN_LABS_VOICE_ID',
+      ),
+  );
+
+  if (!apiKey) {
+    return Response.json(
+      { error: 'ELEVENLABS_API_KEY manquant cote serveur.' },
+      { status: 503, headers: corsHeaders },
+    );
+  }
+  if (!voiceId) {
+    return Response.json(
+      { error: 'ELEVENLABS_CALL_VOICE_ID manquant ou invalide cote serveur.' },
+      { status: 503, headers: corsHeaders },
+    );
+  }
+
+  const modelId = body.modelId ?? getServerEnv('ELEVENLABS_MODEL_ID') ?? DEFAULT_ELEVENLABS_MODEL;
+  const response = await fetchWithRetry(
+    `${ELEVENLABS_SPEAK_URL}/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
+    {
+      method: 'POST',
+      headers: {
+        'xi-api-key': apiKey,
+        'Content-Type': 'application/json',
+        Accept: 'audio/mpeg',
+      },
+      body: JSON.stringify({
+        text,
+        model_id: modelId,
+        voice_settings: {
+          stability: 0.45,
+          similarity_boost: 0.85,
+          style: 0.2,
+          use_speaker_boost: true,
+        },
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const detail = await response.text();
+    return Response.json(
+      { error: 'ElevenLabs TTS a refuse la requete.', detail },
+      { status: response.status, headers: corsHeaders },
+    );
+  }
+
+  return new Response(await response.arrayBuffer(), {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'audio/mpeg',
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+function normalizeItalianModel(model: string): string {
+  return ITALIAN_MODEL_RE.test(model) ? model : DEFAULT_MODEL;
+}
+
+function normalizeElevenLabsId(id: string | undefined): string | null {
+  const trimmed = id?.trim();
+  return trimmed && ELEVENLABS_ID_RE.test(trimmed) ? trimmed : null;
 }

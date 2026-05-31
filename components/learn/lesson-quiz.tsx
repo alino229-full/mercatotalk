@@ -23,6 +23,7 @@ import Animated, {
 
 import { useItalianTTS } from '@/hooks/use-italian-tts';
 import { successFeedback, warningFeedback } from '@/services/haptics';
+import { playQuizSound, preloadQuizSounds } from '@/services/quiz-sounds';
 import {
   normaliseAnswer,
   speakableIt,
@@ -72,6 +73,7 @@ export function LessonQuiz({ questions, accentColor, onComplete, onAbort }: Prop
 
   useEffect(() => {
     mounted.current = true;
+    preloadQuizSounds();
     return () => {
       mounted.current = false;
       if (advanceTimer.current) clearTimeout(advanceTimer.current);
@@ -89,9 +91,11 @@ export function LessonQuiz({ questions, accentColor, onComplete, onAbort }: Prop
       advanceTimer.current = setTimeout(() => {
         if (!mounted.current) return;
         if (index + 1 >= total) {
+          const score = Math.round((nextCorrect / Math.max(total, 1)) * 100);
           progress.value = withTiming(1, { duration: 400 });
           setCorrectCount(nextCorrect);
-          onComplete(Math.round((nextCorrect / Math.max(total, 1)) * 100));
+          playQuizSound(score >= 80 ? 'bravo' : 'complete');
+          onComplete(score);
         } else {
           setCorrectCount(nextCorrect);
           setIndex((i) => i + 1);
@@ -194,7 +198,7 @@ function ChoiceButton({
         accessibilityLabel={label}
         disabled={disabled}
         onPress={() => {
-          scale.value = withSequence(withSpring(0.96), withSpring(1));
+          scale.set(withSequence(withSpring(0.96), withSpring(1)));
           onPress();
         }}
         style={[
@@ -236,6 +240,7 @@ function TranslateView({
       const correct = choice === q.correct;
       if (correct) void successFeedback();
       else void warningFeedback();
+      playQuizSound(correct ? 'correct' : 'wrong');
       onResult(correct);
     },
     [picked, q.correct, onResult],
@@ -296,6 +301,7 @@ function ListenView({
       const correct = choice === q.correct;
       if (correct) void successFeedback();
       else void warningFeedback();
+      playQuizSound(correct ? 'correct' : 'wrong');
       onResult(correct);
     },
     [picked, q.correct, onResult],
@@ -303,7 +309,7 @@ function ListenView({
 
   return (
     <View style={styles.body}>
-      <Text style={styles.instruction}>Qu'as-tu entendu ?</Text>
+      <Text style={styles.instruction}>{"Qu'as-tu entendu ?"}</Text>
       <View style={styles.speakerWrap}>
         <Animated.View style={pulseStyle}>
           <Pressable
@@ -337,6 +343,14 @@ function ListenView({
 
 type MatchState = 'idle' | 'selected' | 'done' | 'error';
 
+function stableHash(value: string): number {
+  let hash = 5381;
+  for (let index = 0; index < value.length; index++) {
+    hash = ((hash << 5) + hash + value.charCodeAt(index)) | 0;
+  }
+  return hash >>> 0;
+}
+
 function MatchView({
   q,
   accentColor,
@@ -349,8 +363,11 @@ function MatchView({
   const tts = useItalianTTS();
   const itColumn = useMemo(() => q.pairs.map((p) => ({ key: p.id, text: p.it })), [q.pairs]);
   const frColumn = useMemo(
-    () => [...q.pairs].sort(() => Math.random() - 0.5).map((p) => ({ key: p.id, text: p.fr })),
-    [q.pairs],
+    () =>
+      [...q.pairs]
+        .sort((a, b) => stableHash(`${q.id}:${a.id}`) - stableHash(`${q.id}:${b.id}`))
+        .map((p) => ({ key: p.id, text: p.fr })),
+    [q.id, q.pairs],
   );
   const [selectedIt, setSelectedIt] = useState<string | null>(null);
   const [matched, setMatched] = useState<Set<string>>(new Set());
@@ -364,6 +381,7 @@ function MatchView({
     const correct = mistakes.current <= 1;
     if (correct) void successFeedback();
     else void warningFeedback();
+    playQuizSound(correct ? 'correct' : 'wrong');
     onResult(correct);
   }, [onResult]);
 
@@ -385,11 +403,13 @@ function MatchView({
         setMatched(next);
         setSelectedIt(null);
         void successFeedback();
+        playQuizSound('correct');
         if (next.size === q.pairs.length) setTimeout(finish, 280);
       } else {
         mistakes.current += 1;
         setErrorKey(key);
         void warningFeedback();
+        playQuizSound('wrong');
         setTimeout(() => setErrorKey(null), 450);
       }
     },
@@ -512,9 +532,11 @@ function BuildView({
     setChecked(correct ? 'correct' : 'wrong');
     if (correct) {
       void successFeedback();
+      playQuizSound('correct');
       tts.speak(q.sentence, { rate: 0.85 });
     } else {
       void warningFeedback();
+      playQuizSound('wrong');
     }
     onResult(correct);
   }, [answer, q.solution, q.sentence, onResult, tts]);
@@ -526,7 +548,7 @@ function BuildView({
 
       <View style={[styles.answerZone, checked === 'correct' && styles.answerZoneOk, checked === 'wrong' && styles.answerZoneKo]}>
         {answer.length === 0 ? (
-          <Text style={styles.answerPlaceholder}>Tape les mots dans l'ordre…</Text>
+          <Text style={styles.answerPlaceholder}>{"Tape les mots dans l'ordre..."}</Text>
         ) : (
           answer.map((tile) => (
             <Animated.View key={tile.id} entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)} layout={LinearTransition}>
@@ -588,9 +610,11 @@ function TypeView({
       setChecked(correct ? 'correct' : 'wrong');
       if (correct) {
         void successFeedback();
+        playQuizSound('correct');
         tts.speak(q.accepted[0]!, { rate: 0.85 });
       } else {
         void warningFeedback();
+        playQuizSound('wrong');
       }
       onResult(correct);
     },

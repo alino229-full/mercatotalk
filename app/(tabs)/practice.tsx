@@ -116,7 +116,7 @@ function QuizStartScreen({ session, isQuick }: { session: QuizSessionState; isQu
         <Text style={styles.startEmoji}>{isQuick ? '⚡' : '🎯'}</Text>
         <Text style={styles.startTitle}>{isQuick ? 'Révision rapide' : 'Quiz prêt'}</Text>
         <Text style={styles.startSub}>
-          {session.totalInSeries} questions · 15 secondes par question
+          {session.totalInSeries} questions · temps adapté à la longueur des réponses
         </Text>
       </View>
 
@@ -157,6 +157,7 @@ function QuizQuestionScreen({ session }: { session: QuizSessionState }) {
 
   const progress = ((session.currentIndex) / session.totalInSeries) * 100;
   const isAnswered = session.answerState !== 'unanswered';
+  const canSkipQuestion = !isAnswered && session.timerProgress <= 0.5;
   const timerColor = session.timeLeft <= 5 ? C.wrong : session.timeLeft <= 9 ? C.orange : C.blue;
 
   return (
@@ -279,13 +280,31 @@ function QuizQuestionScreen({ session }: { session: QuizSessionState }) {
           </View>
         )}
 
+        {canSkipQuestion ? (
+          <Animated.View entering={FadeInUp.duration(220)}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Passer cette question et afficher la bonne reponse"
+              onPress={session.skipQuestion}
+              style={({ pressed }) => [styles.skipBtn, pressed && styles.skipBtnPressed]}>
+              <Text style={styles.skipBtnText}>Je ne sais pas · suivant</Text>
+            </Pressable>
+          </Animated.View>
+        ) : null}
+
         {isAnswered && (
           <Animated.View entering={FadeInUp.duration(280)} style={[
             styles.feedbackCard,
             session.answerState === 'correct' ? styles.feedbackCorrect : styles.feedbackWrong,
           ]}>
             <Text style={[styles.feedbackTitle, { color: session.answerState === 'correct' ? C.primaryDark : C.wrong }]}>
-              {session.answerState === 'correct' ? '✓  Correct !' : session.selectedId === '__timeout__' ? '⏱  Temps écoulé' : '✗  Incorrect'}
+              {session.answerState === 'correct'
+                ? '✓  Correct !'
+                : session.selectedId === '__timeout__'
+                ? '⏱  Temps écoulé'
+                : session.selectedId === '__skip__'
+                ? 'Réponse révélée'
+                : '✗  Incorrect'}
             </Text>
             {session.lastXpAward && session.answerState === 'correct' ? (
               <Animated.View entering={ZoomIn.duration(240)} style={styles.xpFlash}>
@@ -294,7 +313,7 @@ function QuizQuestionScreen({ session }: { session: QuizSessionState }) {
             ) : null}
             {session.answerState === 'wrong' && (
               <Text style={styles.feedbackHint}>
-                Réponse :{' '}
+                Bonne réponse :{' '}
                 <Text style={styles.feedbackAnswer}>
                   {q.choices.find((c) => c.id === q.correctId)?.label ?? ''}
                 </Text>
@@ -307,6 +326,17 @@ function QuizQuestionScreen({ session }: { session: QuizSessionState }) {
                 <Text style={styles.explanationText}>{q.explanation}</Text>
               </View>
             ) : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Passer a la question suivante"
+              onPress={session.goToNextQuestion}
+              style={({ pressed }) => [
+                styles.nextBtn,
+                session.answerState === 'correct' ? styles.nextBtnCorrect : styles.nextBtnWrong,
+                pressed && styles.nextBtnPressed,
+              ]}>
+              <Text style={styles.nextBtnText}>Suivant →</Text>
+            </Pressable>
           </Animated.View>
         )}
 
@@ -334,13 +364,14 @@ function HardModeInput({
   submitVoiceAnswer: (uri: string) => Promise<string | null>;
 }) {
   const [draft, setDraft] = useState('');
+  const [submittedAnswer, setSubmittedAnswer] = useState('');
   const recorder = useVoiceRecorder();
-  const correctLabel = question.choices.find((c) => c.id === question.correctId)?.label ?? '';
 
   const handleSubmit = useCallback(() => {
-    if (!draft.trim()) return;
-    onSubmit(draft.trim());
-    setDraft('');
+    const answer = draft.trim();
+    if (!answer) return;
+    setSubmittedAnswer(answer);
+    onSubmit(answer);
   }, [draft, onSubmit]);
 
   const handleMicPress = async () => {
@@ -350,6 +381,7 @@ function HardModeInput({
         const transcribed = await submitVoiceAnswer(res.uri);
         if (transcribed) {
           setDraft(transcribed);
+          setSubmittedAnswer(transcribed);
         }
       }
     } else {
@@ -406,8 +438,13 @@ function HardModeInput({
         </View>
       ) : (
         <View style={[styles.hardModeReveal, answerState === 'correct' ? styles.hardModeRevealCorrect : styles.hardModeRevealWrong]}>
-          <Text style={styles.hardModeRevealText}>
-            {answerState === 'correct' ? '✓ Bonne réponse' : `Réponse correcte : ${correctLabel}`}
+          <Text style={[
+            styles.hardModeRevealText,
+            answerState === 'correct' ? styles.hardModeRevealTextCorrect : styles.hardModeRevealTextWrong,
+          ]}>
+            {answerState === 'correct'
+              ? '✓ Bonne réponse'
+              : `Ta réponse : ${submittedAnswer || draft || 'aucune réponse'}`}
           </Text>
         </View>
       )}
@@ -487,6 +524,7 @@ function SeriesResultScreen({ session }: { session: QuizSessionState }) {
       <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
 
       <Animated.View entering={ZoomIn.duration(500)} style={styles.resultHero}>
+        {pct >= 80 ? <SparkleBurst /> : null}
         <Text style={styles.resultEmoji}>{emoji}</Text>
         <Text style={[styles.resultPct, { color }]}>{pct}%</Text>
         <Text style={styles.resultLabel}>{correct} / {total} bonnes réponses</Text>
@@ -538,6 +576,37 @@ function SeriesResultScreen({ session }: { session: QuizSessionState }) {
         <Text style={styles.resultTotal}>{session.totalItems} mots dans ta banque</Text>
       </Animated.View>
     </ScrollView>
+  );
+}
+
+function SparkleBurst() {
+  const sparkles = [
+    { id: 's1', label: '✦', top: 4, left: '18%', delay: 40 },
+    { id: 's2', label: '✧', top: 34, left: '8%', delay: 160 },
+    { id: 's3', label: '✦', top: 12, right: '16%', delay: 100 },
+    { id: 's4', label: '✧', top: 62, right: '7%', delay: 230 },
+    { id: 's5', label: '★', top: 102, left: '22%', delay: 310 },
+    { id: 's6', label: '★', top: 100, right: '21%', delay: 360 },
+  ] as const;
+
+  return (
+    <View pointerEvents="none" style={styles.sparkleLayer}>
+      {sparkles.map((sparkle) => (
+        <Animated.Text
+          key={sparkle.id}
+          entering={ZoomIn.delay(sparkle.delay).springify()}
+          style={[
+            styles.sparkle,
+            {
+              top: sparkle.top,
+              left: 'left' in sparkle ? sparkle.left : undefined,
+              right: 'right' in sparkle ? sparkle.right : undefined,
+            },
+          ]}>
+          {sparkle.label}
+        </Animated.Text>
+      ))}
+    </View>
   );
 }
 
@@ -674,6 +743,8 @@ const styles = StyleSheet.create({
   hardModeRevealCorrect: { backgroundColor: C.correctBg },
   hardModeRevealWrong: { backgroundColor: C.wrongBg },
   hardModeRevealText: { color: C.text, fontSize: 14, fontWeight: '800' },
+  hardModeRevealTextCorrect: { color: C.primaryDark },
+  hardModeRevealTextWrong: { color: C.wrong },
 
   // Choices
   choicesGrid: { gap: 10 },
@@ -689,6 +760,16 @@ const styles = StyleSheet.create({
   choiceTextCorrect: { color: correctDark },
   choiceTextWrong: { color: C.wrong },
   choiceIcon: { fontSize: 20, fontWeight: '900', color: C.correct, marginLeft: 8 },
+  skipBtn: {
+    alignItems: 'center',
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: C.border,
+    backgroundColor: C.surface,
+    paddingVertical: 14,
+  },
+  skipBtnPressed: { backgroundColor: C.surface2, borderColor: C.orange },
+  skipBtnText: { color: C.orange, fontSize: 15, fontWeight: '900' },
 
   // Feedback
   feedbackCard: { borderRadius: 20, borderWidth: 1.5, padding: 16, gap: 10 },
@@ -717,7 +798,9 @@ const styles = StyleSheet.create({
 
   // Results
   resultScroll: { padding: 24, gap: 16 },
-  resultHero: { alignItems: 'center', gap: 6, paddingVertical: 16 },
+  resultHero: { alignItems: 'center', gap: 6, paddingVertical: 16, position: 'relative', overflow: 'visible' },
+  sparkleLayer: { ...StyleSheet.absoluteFill },
+  sparkle: { position: 'absolute', color: '#FFC800', fontSize: 28, fontWeight: '900' },
   resultEmoji: { fontSize: 60, marginBottom: 8 },
   resultPct: { fontSize: 64, fontWeight: '900', fontVariant: ['tabular-nums'] },
   resultLabel: { color: C.muted, fontSize: 16, fontWeight: '700' },

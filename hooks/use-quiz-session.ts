@@ -14,6 +14,7 @@ import {
 import { fetchGroqQuizItems } from '@/services/groq-quiz-client';
 import { errorFeedback, successFeedback, warningFeedback } from '@/services/haptics';
 import { speakIt, stopIt } from '@/services/italian-tts';
+import { playQuizSound, preloadQuizSounds } from '@/services/quiz-sounds';
 import { transcribeLocalAudio } from '@/services/transcription-client';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -63,6 +64,7 @@ export type QuizSessionState = {
   source: QuizSource;
   totalItems: number;
   timeLeft: number;
+  timeLimit: number;
   timerProgress: number;
   lastXpAward: number | null;
   totalXpAwarded: number;
@@ -80,6 +82,8 @@ export type QuizSessionState = {
   resumeSession: () => void;
   playAudio: () => void;
   selectChoice: (id: string) => void;
+  skipQuestion: () => void;
+  goToNextQuestion: () => void;
   submitTypedAnswer: (text: string) => void;
   submitVoiceAnswer: (uri: string) => Promise<string | null>;
   toggleHardMode: () => void;
@@ -91,7 +95,8 @@ export type QuizSessionState = {
 const DEFAULT_SERIES_SIZE = 20;
 const AUTO_ADVANCE_MS = 1100;
 const WRONG_ANSWER_ADVANCE_MS = 4600;
-const QUESTION_TIME_SECONDS = 15;
+const DEFAULT_QUESTION_TIME_SECONDS = 15;
+const MAX_TYPING_TIME_SECONDS = 90;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -248,7 +253,37 @@ function detectWeakCategories(results: QuizResult[]): string[] {
 }
 
 function normalizeAnswer(text: string): string {
-  return text.toLowerCase().trim().replace(/\s+/g, ' ');
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[’`]/g, "'")
+    .replace(/\s*\/\s*/g, '/')
+    .replace(/[?!.,;:¡¿]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getExpectedAnswerText(question: QuizQuestion): string {
+  return question.choices.find((choice) => choice.id === question.correctId)?.label ?? question.it;
+}
+
+function estimateQuestionTimeSeconds(question: QuizQuestion, hardMode: boolean): number {
+  const expected = getExpectedAnswerText(question);
+  const charCount = expected.length;
+  const wordCount = expected.split(/\s+/).filter(Boolean).length;
+
+  if (hardMode || question.type === 'dictation') {
+    const base = question.type === 'dictation' ? 24 : 18;
+    const estimated = base + wordCount * 3 + Math.ceil(charCount / 5);
+    return Math.max(20, Math.min(MAX_TYPING_TIME_SECONDS, estimated));
+  }
+
+  if (question.type === 'listen_to_fr') {
+    return Math.max(DEFAULT_QUESTION_TIME_SECONDS, Math.min(30, 14 + wordCount * 2));
+  }
+
+  return Math.max(DEFAULT_QUESTION_TIME_SECONDS, Math.min(28, 12 + Math.ceil(question.prompt.length / 18)));
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -267,7 +302,8 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
   const [isGroqLoading, setIsGroqLoading] = useState(false);
   const [source, setSource] = useState<QuizSource>('local');
   const [totalItems, setTotalItems] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(QUESTION_TIME_SECONDS);
+  const [timeLeft, setTimeLeft] = useState(DEFAULT_QUESTION_TIME_SECONDS);
+  const [timeLimit, setTimeLimit] = useState(DEFAULT_QUESTION_TIME_SECONDS);
   const [lastXpAward, setLastXpAward] = useState<number | null>(null);
   const [totalXpAwarded, setTotalXpAwarded] = useState(0);
   const [hasStarted, setHasStarted] = useState(false);
@@ -286,6 +322,12 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
   const resultsRef = useRef<QuizResult[]>([]);
   const answeredRef = useRef(false);
   const comboRef = useRef(0);
+
+  const setQuestionTime = useCallback((question: QuizQuestion | undefined, nextHardMode = hardMode) => {
+    const nextLimit = question ? estimateQuestionTimeSeconds(question, nextHardMode) : DEFAULT_QUESTION_TIME_SECONDS;
+    setTimeLimit(nextLimit);
+    setTimeLeft(nextLimit);
+  }, [hardMode]);
 
   const clearTimer = useCallback(() => {
     if (advanceTimer.current) {
@@ -323,6 +365,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
       setLastXpAward(bonusXp);
       setTotalXpAwarded((prev) => prev + bonusXp);
       await successFeedback();
+      playQuizSound(scoreAvg >= 80 ? 'bravo' : 'complete');
       setIsSeriesDone(true);
     } else {
       indexRef.current = next;
@@ -331,13 +374,13 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
       setSelectedId(null);
       answeredRef.current = false;
       setLastXpAward(null);
-      setTimeLeft(QUESTION_TIME_SECONDS);
       const nextQ = questionsRef.current[next];
+      setQuestionTime(nextQ);
       if (nextQ?.type === 'listen_to_fr' || nextQ?.type === 'dictation') {
         setTimeout(() => { void speakIt(speakableText(nextQ.prompt), { rate: 0.82 }); }, 200);
       }
     }
-  }, []);
+  }, [setQuestionTime]);
 
   const selectChoice = useCallback(
     (id: string) => {
@@ -370,14 +413,22 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
         setLastXpAward(xp);
         setTotalXpAwarded((prev) => prev + xp);
         addXp(xp).catch(() => null);
+        playQuizSound('correct');
         successFeedback();
       } else if (id === '__timeout__') {
         comboRef.current = 0;
         setCombo(0);
+        playQuizSound('wrong');
+        warningFeedback();
+      } else if (id === '__skip__') {
+        comboRef.current = 0;
+        setCombo(0);
+        playQuizSound('tap');
         warningFeedback();
       } else {
         comboRef.current = 0;
         setCombo(0);
+        playQuizSound('wrong');
         errorFeedback();
       }
 
@@ -407,6 +458,21 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     [selectChoice],
   );
 
+  const skipQuestion = useCallback(() => {
+    selectChoice('__skip__');
+  }, [selectChoice]);
+
+  const goToNextQuestion = useCallback(() => {
+    if (!hasStarted || isPaused) return;
+    if (answerState === 'unanswered') {
+      skipQuestion();
+      return;
+    }
+    clearTimer();
+    playQuizSound('tap');
+    void advanceQuestion();
+  }, [advanceQuestion, answerState, clearTimer, hasStarted, isPaused, skipQuestion]);
+
   const submitVoiceAnswer = useCallback(
     async (uri: string): Promise<string | null> => {
       setIsTranscribing(true);
@@ -427,8 +493,14 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
   );
 
   const toggleHardMode = useCallback(() => {
-    setHardMode((prev) => !prev);
-  }, []);
+    setHardMode((prev) => {
+      const next = !prev;
+      if (!hasStarted) {
+        setQuestionTime(questionsRef.current[indexRef.current], next);
+      }
+      return next;
+    });
+  }, [hasStarted, setQuestionTime]);
 
   const startNewSeries = useCallback(async (pool: QuizBankItem[], previousResults?: QuizResult[]) => {
     clearTimer();
@@ -444,7 +516,8 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     setIsSeriesDone(false);
     setHasStarted(false);
     setIsPaused(false);
-    setTimeLeft(QUESTION_TIME_SECONDS);
+    setTimeLimit(DEFAULT_QUESTION_TIME_SECONDS);
+    setTimeLeft(DEFAULT_QUESTION_TIME_SECONDS);
     setLastXpAward(null);
     setTotalXpAwarded(0);
     setCombo(0);
@@ -464,6 +537,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     const localSeries = buildSeries(pool, seriesSize, dueItems);
     questionsRef.current = localSeries;
     setQuestions(localSeries);
+    setQuestionTime(localSeries[0]);
     setSource('local');
 
     setIsGroqLoading(true);
@@ -500,6 +574,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
 
   const startSession = useCallback(() => {
     if (questionsRef.current.length === 0) return;
+    playQuizSound('tap');
     setHasStarted(true);
     setIsPaused(false);
     sessionStart.current = Date.now();
@@ -529,6 +604,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
   }, [advanceQuestion, answerState, hasStarted, isSeriesDone]);
 
   useEffect(() => {
+    preloadQuizSounds();
     (async () => {
       setIsLoading(true);
       const [sm2Cards, bankItems, cachedDbItems] = await Promise.all([
@@ -599,7 +675,8 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     source,
     totalItems,
     timeLeft,
-    timerProgress: timeLeft / QUESTION_TIME_SECONDS,
+    timeLimit,
+    timerProgress: timeLimit > 0 ? timeLeft / timeLimit : 0,
     lastXpAward,
     totalXpAwarded,
     hasStarted,
@@ -613,6 +690,8 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     resumeSession,
     playAudio,
     selectChoice,
+    skipQuestion,
+    goToNextQuestion,
     submitTypedAnswer,
     submitVoiceAnswer,
     toggleHardMode,

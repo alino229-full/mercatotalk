@@ -19,7 +19,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { ACCENT_COLORS, getMissionById, type B2BMission } from '@/data/b2b-missions';
+import { getMissionById, type B2BMission } from '@/data/b2b-missions';
 import { addXp, insertLearningSession } from '@/database/italpro-local-db';
 import { successFeedback, tapFeedback, warningFeedback } from '@/services/haptics';
 import { speakIt } from '@/services/italian-tts';
@@ -76,7 +76,6 @@ export default function DrillExerciseScreen() {
 
 function DrillContent({ mission }: { mission: B2BMission }) {
   const insets = useSafeAreaInsets();
-  const accent = ACCENT_COLORS[mission.accent];
   const initialMode = mission.numberModes[0] ?? 'price';
 
   const [drillMode, setDrillMode] = useState<NumberDrillMode>(initialMode);

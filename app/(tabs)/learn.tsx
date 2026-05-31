@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -54,7 +54,10 @@ export default function LearnScreen() {
 
   const { states, resumeId } = useMemo(() => computePathState(completedSet), [completedSet]);
   const resumeIdRef = useRef<string | null>(null);
-  resumeIdRef.current = resumeId;
+
+  useEffect(() => {
+    resumeIdRef.current = resumeId;
+  }, [resumeId]);
 
   const reload = useCallback(async () => {
     await ensureLessonProgressSeed(allGateIds);

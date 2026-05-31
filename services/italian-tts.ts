@@ -2,7 +2,7 @@
  * Italian TTS — neural voices with a 3-tier fallback chain.
  * ─────────────────────────────────────────────────────────────
  *
- *   Tier 1 · Deepgram Aura-2 (via the /api/tts server proxy, key stays server-side)
+ *   Tier 1 · ElevenLabs or Deepgram Aura-2 (via /api/tts, keys stay server-side)
  *   Tier 2 · Cloudflare Worker → Microsoft Edge Neural TTS
  *   Tier 3 · expo-speech (device voice, fully offline)
  *
@@ -20,6 +20,8 @@
 
 import { createAudioPlayer, type AudioPlayer } from 'expo-audio';
 import * as Speech from 'expo-speech';
+import type { Voice } from 'expo-speech';
+import { Platform } from 'react-native';
 
 import { getExpoApiBaseUrl } from '@/services/api-base-url';
 
@@ -31,10 +33,14 @@ const configuredApiUrl =
 
 const DEFAULT_DEEPGRAM_F = process.env.EXPO_PUBLIC_DEEPGRAM_TTS_MODEL ?? 'aura-2-cesare-it';
 const DEFAULT_DEEPGRAM_M = process.env.EXPO_PUBLIC_DEEPGRAM_TTS_MODEL_M ?? 'aura-2-cesare-it';
+const DEFAULT_ELEVENLABS_MODEL =
+  process.env.EXPO_PUBLIC_ELEVENLABS_MODEL_ID ?? 'eleven_multilingual_v2';
 
 const CACHE_DIR_NAME = 'tts-cache';
 const FETCH_TIMEOUT_MS = 12_000;
-const IS_WEB = process.env.EXPO_OS === 'web';
+const IS_WEB = Platform.OS === 'web';
+const WORKER_ENABLED = process.env.EXPO_PUBLIC_ITALPRO_TTS_ENABLE_WORKER === '1';
+const ITALIAN_DEEPGRAM_MODEL_RE = /^aura-2-[a-z0-9-]+-it$/i;
 
 export type ItalianVoice =
   | 'it-IT-IsabellaNeural'  // F · cordiale (default)
@@ -59,16 +65,27 @@ export type SpeakOptions = {
   forceLocal?: boolean;
   /**
    * Try Deepgram first, Worker Edge as fallback. Recommended for long phrases
-   * (B2B dialogue) where Deepgram shines. Default order (Worker first) suits the
-   * short words of quizzes/lessons where Deepgram currently truncates.
+   * (B2B dialogue) where Deepgram shines. Short words default to device TTS
+   * because it is more stable and does not burn Worker/Deepgram quota.
    */
   preferDeepgram?: boolean;
+  /** Try ElevenLabs first. Intended for call simulation voices. */
+  preferElevenLabs?: boolean;
+  /** Optional ElevenLabs voice override. Normally leave undefined so the server uses env. */
+  elevenLabsVoiceId?: string;
+  /** Optional ElevenLabs model override. Defaults to eleven_multilingual_v2. */
+  elevenLabsModelId?: string;
+  /** Opt into the public Worker fallback. Disabled by default to avoid rate limits. */
+  allowWorker?: boolean;
 };
 
 type AudioExt = 'wav' | 'mp3';
 
 let currentPlayer: AudioPlayer | null = null;
 let workerCooldownUntil = 0;
+let deepgramCooldownUntil = 0;
+let elevenLabsCooldownUntil = 0;
+let italianDeviceVoicePromise: Promise<string | undefined> | null = null;
 const inflight = new Map<string, Promise<string | null>>();
 
 /**
@@ -79,16 +96,23 @@ export async function speakIt(rawText: string, opts: SpeakOptions = {}): Promise
   const text = rawText?.trim();
   if (!text) return;
 
-  stopIt();
-
-  if (opts.forceLocal) {
-    return playWithDeviceFallback(text, opts);
-  }
-
   try {
+    stopIt();
+
+    if (opts.forceLocal) {
+      playWithDeviceFallback(text, opts);
+      return;
+    }
+
+    if (!opts.preferElevenLabs && !opts.preferDeepgram && !shouldUseWorker(opts)) {
+      playWithDeviceFallback(text, opts);
+      return;
+    }
+
     const uri = await getOrFetchAudio(text, opts);
     if (!uri) {
-      return playWithDeviceFallback(text, opts);
+      playWithDeviceFallback(text, opts);
+      return;
     }
     const player = createAudioPlayer({ uri });
     currentPlayer = player;
@@ -109,12 +133,17 @@ function playWhenReady(player: AudioPlayer): void {
     player.play();
     return;
   }
-  const sub = player.addListener('playbackStatusUpdate', (status) => {
-    if (status.isLoaded && currentPlayer === player) {
-      player.play();
-      sub.remove();
+  const startedAt = Date.now();
+  const intervalId = setInterval(() => {
+    if (currentPlayer !== player) {
+      clearInterval(intervalId);
+      return;
     }
-  });
+    if (player.isLoaded || Date.now() - startedAt > 2_000) {
+      player.play();
+      clearInterval(intervalId);
+    }
+  }, 30);
 }
 
 /** Stop both the neural player and any device-TTS utterance. */
@@ -145,14 +174,17 @@ export async function preloadPhrases(phrases: string[], voice?: ItalianVoice): P
 // ─── Tier orchestration ───────────────────────────────────────────────────────
 
 async function getOrFetchAudio(text: string, opts: SpeakOptions): Promise<string | null> {
-  // Order the two neural providers per call:
-  //  - B2B long phrases  → Deepgram first (opts.preferDeepgram), Worker fallback.
-  //  - Quiz/lesson words → Worker first (default), Deepgram fallback.
-  // Either way, if the Worker hits its rate limit the chain falls through to the
-  // other provider, then to device TTS in the caller.
-  const providers = opts.preferDeepgram
-    ? [tryDeepgram, tryWorker]
-    : [tryWorker, tryDeepgram];
+  const providers: Array<(value: string, options: SpeakOptions) => Promise<string | null>> = [];
+
+  if (opts.preferElevenLabs) {
+    providers.push(tryElevenLabs, tryDeepgram);
+  } else if (opts.preferDeepgram) {
+    providers.push(tryDeepgram);
+  }
+
+  if (shouldUseWorker(opts)) {
+    providers.push(tryWorker);
+  }
 
   for (const provider of providers) {
     const uri = await provider(text, opts);
@@ -176,10 +208,21 @@ async function tryWorker(text: string, opts: SpeakOptions): Promise<string | nul
 }
 
 async function tryDeepgram(text: string, opts: SpeakOptions): Promise<string | null> {
+  if (isCoolingDown(deepgramCooldownUntil)) return null;
   const apiBase = getExpoApiBaseUrl(configuredApiUrl);
   if (!apiBase) return null;
   const model = opts.deepgramModel ?? resolveDeepgramModel(opts.voice);
   return coalesce(`dg_${model}_${hash(text)}`, () => fetchDeepgram(apiBase, text, model));
+}
+
+async function tryElevenLabs(text: string, opts: SpeakOptions): Promise<string | null> {
+  if (isCoolingDown(elevenLabsCooldownUntil)) return null;
+  const apiBase = getExpoApiBaseUrl(configuredApiUrl);
+  if (!apiBase) return null;
+  const voiceId = opts.elevenLabsVoiceId ?? 'default';
+  const modelId = opts.elevenLabsModelId ?? DEFAULT_ELEVENLABS_MODEL;
+  const key = `el_${hash(`${voiceId}|${modelId}|${text}`)}`;
+  return coalesce(key, () => fetchElevenLabs(apiBase, text, voiceId, modelId, key));
 }
 
 /** Coalesce concurrent requests for the same cache key. */
@@ -192,11 +235,53 @@ function coalesce(key: string, factory: () => Promise<string | null>): Promise<s
 }
 
 function resolveDeepgramModel(voice?: ItalianVoice): string {
-  if (voice && MALE_VOICES.has(voice)) return DEFAULT_DEEPGRAM_M;
-  return DEFAULT_DEEPGRAM_F;
+  const model = voice && MALE_VOICES.has(voice) ? DEFAULT_DEEPGRAM_M : DEFAULT_DEEPGRAM_F;
+  return normalizeDeepgramModel(model);
 }
 
-// ─── Tier 1: Deepgram ─────────────────────────────────────────────────────────
+// ─── Tier 1: ElevenLabs / Deepgram ────────────────────────────────────────────
+
+async function fetchElevenLabs(
+  apiBase: string,
+  text: string,
+  voiceId: string,
+  modelId: string,
+  key: string,
+): Promise<string | null> {
+  const cached = await readCachedFile(key, 'mp3');
+  if (cached) return cached;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${apiBase}/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'elevenlabs',
+          text,
+          voiceId: voiceId === 'default' ? undefined : voiceId,
+          modelId,
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        console.warn(`[italian-tts] elevenlabs ${res.status} (try ${attempt + 1})`);
+        if (res.status === 429 || res.status >= 500) triggerElevenLabsCooldown();
+        continue;
+      }
+      const buf = new Uint8Array(await res.arrayBuffer());
+      if (buf.length === 0) continue;
+      return writeCachedFile(key, buf, 'mp3');
+    } catch (err) {
+      logFetchError('elevenlabs', err);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return null;
+}
 
 async function fetchDeepgram(apiBase: string, text: string, model: string): Promise<string | null> {
   const key = `dg_${model}_${hash(text)}`;
@@ -217,6 +302,7 @@ async function fetchDeepgram(apiBase: string, text: string, model: string): Prom
       });
       if (!res.ok) {
         console.warn(`[italian-tts] deepgram ${res.status} (try ${attempt + 1})`);
+        if (res.status === 429 || res.status >= 500) triggerDeepgramCooldown();
         continue;
       }
       const buf = new Uint8Array(await res.arrayBuffer());
@@ -272,11 +358,22 @@ async function fetchWorker(
 // ─── Device fallback ──────────────────────────────────────────────────────────
 
 function playWithDeviceFallback(text: string, opts: SpeakOptions): void {
-  Speech.speak(text, {
-    language: 'it-IT',
-    rate: opts.rate ?? 1,
-    pitch: opts.pitch ?? 1,
-  });
+  getItalianDeviceVoice()
+    .then((voice) => {
+      try {
+        Speech.speak(text, {
+          language: 'it-IT',
+          voice,
+          rate: opts.rate ?? 1,
+          pitch: opts.pitch ?? 1,
+        });
+      } catch (error) {
+        console.warn('[italian-tts] device TTS failed', error);
+      }
+    })
+    .catch((error) => {
+      console.warn('[italian-tts] device voice lookup failed', error);
+    });
 }
 
 // ─── File cache ───────────────────────────────────────────────────────────────
@@ -374,5 +471,40 @@ function isCoolingDown(until: number): boolean {
 }
 
 function triggerWorkerCooldown(): void {
-  workerCooldownUntil = Date.now() + 60_000;
+  workerCooldownUntil = Date.now() + 5 * 60_000;
+}
+
+function triggerDeepgramCooldown(): void {
+  deepgramCooldownUntil = Date.now() + 2 * 60_000;
+}
+
+function triggerElevenLabsCooldown(): void {
+  elevenLabsCooldownUntil = Date.now() + 2 * 60_000;
+}
+
+function shouldUseWorker(opts: SpeakOptions): boolean {
+  return Boolean(opts.allowWorker || WORKER_ENABLED);
+}
+
+function normalizeDeepgramModel(model: string): string {
+  return ITALIAN_DEEPGRAM_MODEL_RE.test(model) ? model : 'aura-2-cesare-it';
+}
+
+function getItalianDeviceVoice(): Promise<string | undefined> {
+  if (!italianDeviceVoicePromise) {
+    italianDeviceVoicePromise = Speech.getAvailableVoicesAsync()
+      .then(selectItalianVoice)
+      .catch(() => undefined);
+  }
+  return italianDeviceVoicePromise;
+}
+
+function selectItalianVoice(voices: Voice[]): string | undefined {
+  const italianVoices = voices.filter((voice) => voice.language.toLowerCase().startsWith('it'));
+  const preferred =
+    italianVoices.find((voice) => voice.language.toLowerCase() === 'it-it' && voice.quality === Speech.VoiceQuality.Enhanced) ??
+    italianVoices.find((voice) => voice.language.toLowerCase() === 'it-it') ??
+    italianVoices[0];
+
+  return preferred?.identifier;
 }

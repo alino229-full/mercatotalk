@@ -24,13 +24,13 @@ import {
   insertLearningSession,
   saveCallReplay,
   unlockAchievement,
-  type CorrectionRow,
   type DialogueMessageRow,
   type ScenarioRow,
 } from '@/database/italpro-local-db';
 import { useLocalDialogueSession } from '@/hooks/use-local-dialogue-session';
 import { useItalianTTS } from '@/hooks/use-italian-tts';
 import { useVoiceRecorder } from '@/hooks/use-voice-recorder';
+import { buildCallReport, CALL_PHASES, getContextualHints } from '@/services/call-session-helpers';
 import { successFeedback, tapFeedback } from '@/services/haptics';
 import { requestGuidedReplyChoices, type GuidedReplyChoice } from '@/services/guided-choices-ai-client';
 import { classifyDialogueTopic, type GuidedChoiceQuality } from '@/services/local-dialogue-engine';
@@ -56,207 +56,6 @@ const C = {
   red: '#FF4B4B',
   redSoft: '#FFE1E1',
 } as const;
-
-const CALL_PHASES = ['Accroche', 'Qualification', 'Objection', 'Closing'] as const;
-
-// ─── Context-aware hint system ────────────────────────────────────────────────
-// Each HintSet has 1 best response, 1 approximation, 2 wrong distractors.
-// The 4 options are shuffled before display so the learner must understand
-// the client's actual question to pick the right response.
-
-type HintSet = { best: string; approx: string; wrong: [string, string] };
-
-const HINT_SETS: Record<string, HintSet> = {
-  identification: {
-    best: 'Buongiorno, sono Pierre di MercatoTalk. Ci occupiamo di soluzioni container modulari per il settore edile e logistico.',
-    approx: 'Sono un commerciale. Le volevo presentare la nostra offerta.',
-    wrong: ['La consegna è prevista entro 48 ore dalla conferma dell\'ordine.', 'Posso offrire uno sconto del 5% per ordini multipli.'],
-  },
-  cold_open: {
-    best: 'Buongiorno, sono Pierre di MercatoTalk. Le disturbo un momento? Volevamo presentarLe le nostre soluzioni container.',
-    approx: 'Pronto. Chiamo da MercatoTalk per presentarLe la nostra gamma.',
-    wrong: ['Il pagamento è a 30 giorni dalla data di fattura.', 'Abbiamo la certificazione IICL su tutti i container.'],
-  },
-  price: {
-    best: 'Per un 20 piedi standard siamo intorno ai 2.500 euro. Il prezzo include il trasporto. Posso inviarLe un preventivo personalizzato oggi stesso?',
-    approx: 'Il prezzo dipende dal modello e dalle opzioni scelte. È molto competitivo.',
-    wrong: ['La consegna avviene entro 48 ore se il prodotto è in stock.', 'Abbiamo oltre 200 clienti soddisfatti in Italia.'],
-  },
-  delivery: {
-    best: 'Se il container è in stock, la consegna è entro 48 ore. Quando ne avrebbe bisogno esattamente e qual è la Sua zona?',
-    approx: 'I tempi di consegna variano in base alla disponibilità e alla distanza.',
-    wrong: ['Il prezzo base è di 2.100 euro per un 20 piedi usato grade A.', 'Le garanzie coprono 12 mesi dall\'installazione.'],
-  },
-  quality: {
-    best: 'I nostri container sono certificati IICL e forniti con rapporto di ispezione fotografico. Posso inviarLe la documentazione tecnica?',
-    approx: 'La qualità è garantita. Tutti i container vengono ispezionati prima della consegna.',
-    wrong: ['Il prezzo include il trasporto fino a 200 km.', 'La consegna avviene entro 48 ore in tutta Italia.'],
-  },
-  comfort_trust: {
-    best: 'Capisco il Suo dubbio. I moduli da 20 piedi sono isolati, ventilati e collaudati prima della consegna. Posso inviarLe foto reali, scheda tecnica e referenze clienti?',
-    approx: 'Sì, possono essere comodi e affidabili se sono ben isolati e controllati. Le mando la documentazione tecnica.',
-    wrong: ['Il pagamento si effettua con acconto del 30% e saldo alla consegna.', 'Il container da 40 piedi costa di più ma offre più spazio interno.'],
-  },
-  winter_comfort: {
-    best: "Sì, resta caldo se l'isolamento è dimensionato correttamente. Le mando la scheda tecnica dei materiali, foto di moduli già installati e, se vuole, organizziamo una visita o videochiamata.",
-    approx: "Sì, con un buon isolamento il container può restare confortevole anche in inverno. Le invio qualche foto reale.",
-    wrong: ['Possiamo consegnarlo in 48 ore se il trasportatore è disponibile.', 'Il colore RAL può essere verde, grigio o bianco secondo il Suo gusto.'],
-  },
-  availability: {
-    best: 'Sì, abbiamo unità disponibili in stock. Quale dimensione cerca — 20 o 40 piedi — e per quale utilizzo?',
-    approx: 'Dipende dal modello. Può dirmi di cosa ha bisogno esattamente?',
-    wrong: ['Il pagamento si effettua a 30 giorni dalla data di fattura.', 'Offriamo uno sconto del 5% per pagamento anticipato.'],
-  },
-  competitor: {
-    best: 'Capisco che stia confrontando le offerte. Cosa è prioritario per Lei: il prezzo, la qualità o la rapidità di consegna?',
-    approx: 'Siamo competitivi. Posso mostrarLe i nostri punti di forza rispetto al mercato.',
-    wrong: ['La certificazione ATP è inclusa nel prezzo del container frigorifero.', 'L\'installazione avviene su plots réglables o su base in cemento.'],
-  },
-  trust: {
-    best: 'Comprendo la Sua cautela. Siamo operativi dal 2009. Posso fornirLe il nostro numero SIRET, referenze clienti e organizzare un\'ispezione prima di qualsiasi pagamento.',
-    approx: 'Siamo un\'azienda seria con garanzie contrattuali su ogni ordine.',
-    wrong: ['Il prezzo per un 40 piedi nuovo è di 6.200 euro.', 'La consegna in tutta Italia avviene in 48-72 ore.'],
-  },
-  discount: {
-    best: 'Possiamo valutare uno sconto del 5% per pagamento anticipato o per ordini da 2 unità o più. Cosa si adatta meglio alla Sua situazione?',
-    approx: 'La nostra offerta è già molto vantaggiosa. Vediamo cosa possiamo fare.',
-    wrong: ['La consegna è inclusa per distanze fino a 200 km.', 'Il container è certificato IICL con rapporto di ispezione.'],
-  },
-  regulation: {
-    best: 'Per un\'installazione temporanea fino a 3 anni basta la CILA asseverata; oltre i 3 anni serve il permesso di costruire. Si tratta di un uso temporaneo o permanente?',
-    approx: 'Dipende dall\'uso e dalla durata. Le invio una scheda riepilogativa sulle normative italiane.',
-    wrong: ['Il sistema di filtraggio ha una portata di 8 m³/h.', 'Il container frigorifero funziona con un attacco da 32 ampere.'],
-  },
-  installation: {
-    best: 'L\'installazione avviene su plots réglables in acciaio zincato o su una soletta in cemento da 15 cm. I raccordi elettrici e idrici sono a cura del cliente. Vuole un preventivo chiavi in mano?',
-    approx: 'Forniamo tutta la documentazione tecnica. Il posizionamento richiede 2-3 ore.',
-    wrong: ['Il prezzo per un 20 piedi usato grade A è di 2.100 euro.', 'Offriamo uno sconto del 5% per ordini multipli.'],
-  },
-  technical: {
-    best: 'Le invio la scheda tecnica completa. Per il 20 piedi: 5,90 x 2,35 x 2,39 m interni, carico utile 28 t. Quale modello La interessa di più?',
-    approx: 'Dipende dal modello. Abbiamo 20 e 40 piedi con varie configurazioni. Quale si adatta al Suo uso?',
-    wrong: ['Il preventivo è valido per 30 giorni dalla data di emissione.', 'Offriamo il pagamento a 30% all\'ordine e 70% alla consegna.'],
-  },
-  mobile: {
-    best: 'Sì, abbiamo container su rimorchio omologato: il 20 piedi pesa meno di 3,5 t, quindi basta la patente B. Il dispiegamento richiede circa 30 minuti. Vuole sapere di più sull\'allestimento?',
-    approx: 'Abbiamo soluzioni mobili su rimorchio. Dipende dal peso e dall\'uso previsto.',
-    wrong: ['Il container frigorifero mantiene la temperatura tra -25°C e +10°C.', 'La CILA asseverata è sufficiente per installazioni fino a 3 anni.'],
-  },
-  objection_price: {
-    best: 'Capisco. Il prezzo include garanzia, inspection e trasporto. Possiamo però scaglionare il pagamento in due rate. Cosa sarebbe più utile per Lei?',
-    approx: 'È un investimento che si ammortizza rapidamente. Posso mostrarLe il calcolo.',
-    wrong: ['La consegna è inclusa per distanze fino a 200 km.', 'Siamo certificati ISO 9001 per tutti i processi produttivi.'],
-  },
-  closing: {
-    best: 'Ottimo! Posso inviarLe il contratto e il preventivo definitivo oggi stesso. Ha un indirizzo email a cui mandarli?',
-    approx: 'Perfetto. Quando potremmo procedere alla firma? Le mando tutto per email.',
-    wrong: ['La nostra azienda è specializzata nei settori edile e logistico dal 2009.', 'Offriamo anche container refrigerati e container piscina su misura.'],
-  },
-  generic: {
-    best: 'Ho capito la Sua richiesta. Posso spiegarLe meglio il prodotto e le condizioni di fornitura. Cosa vuole sapere esattamente?',
-    approx: 'Certo, Le rispondo subito. Può darmi qualche dettaglio in più?',
-    wrong: ['Il container è disponibile nei colori verde, grigio o bianco RAL.', 'Abbiamo punti di consegna in tutta Italia con tempi ridotti.'],
-  },
-};
-
-// Fallback par phase quand il n'y a pas encore de message client
-const PHASE_INTRO_HINTS: Record<typeof CALL_PHASES[number], HintSet> = {
-  Accroche: {
-    best: 'Buongiorno, sono Pierre di MercatoTalk. Le disturbo un momento? Volevamo presentarLe le nostre soluzioni modulari.',
-    approx: 'Pronto, sono Pierre. Chiamo da MercatoTalk per un\'offerta.',
-    wrong: ['La consegna è prevista entro 48 ore.', 'Il prezzo base è di 2.100 euro per un container usato.'],
-  },
-  Qualification: {
-    best: 'Cosa cerca esattamente per il Suo progetto? E\' Lei il responsabile degli acquisti?',
-    approx: 'Di cosa ha bisogno? Abbiamo diverse soluzioni container.',
-    wrong: ['Offriamo uno sconto del 5% per pagamento anticipato.', 'La certificazione IICL è inclusa su tutti i prodotti.'],
-  },
-  Objection: {
-    best: 'Capisco la Sua preoccupazione. Posso spiegarLe perché il nostro prezzo è giustificato rispetto alla qualità offerta?',
-    approx: 'Possiamo trovare una soluzione che si adatta al Suo budget.',
-    wrong: ['La consegna avviene entro 48 ore in tutta Italia.', 'Abbiamo clienti soddisfatti da Nord a Sud.'],
-  },
-  Closing: {
-    best: 'Posso inviarLe il preventivo definitivo oggi stesso. Ha un indirizzo email?',
-    approx: 'Quando possiamo procedere? Le mando tutto per email.',
-    wrong: ['Il container è disponibile in verde, grigio o bianco.', 'Siamo operativi dal 2009 con oltre 200 clienti in Italia.'],
-  },
-};
-
-function classifyClientMessage(contentIt: string, contentFr: string): string {
-  const t = (contentIt + ' ' + contentFr).toLowerCase();
-
-  if (/chi (è|sei|parla)|non (la|ti) conosco|chi siete|che azienda/.test(t)) return 'identification';
-  if (/pronto\?|chi è\?|cosa vuole|non (la|ti) (conosco|conosc)/.test(t)) return 'cold_open';
-  if (/(inverno|freddo|caldo|resta caldo|riscald|bello solo in foto|sembra bello solo in foto|hiver|chaud|froid)/.test(t)) return 'winter_comfort';
-  if (/(comod|confort|confortable|comfortable).*(affidabil|fiable|fiducia|garanzi)|(?:affidabil|fiable|fiducia|garanzi).*(comod|confort|confortable|comfortable)/.test(t)) return 'comfort_trust';
-  if (/truffat|arnaque|truffe|garanzie serie|fidarsi|sicuro che non|come faccio a sapere|affidabil|fiable/.test(t)) return 'trust';
-  if (/(quanto|costo|prezzo|budget|spend|cher|prix|coût|euro|cost)/.test(t)) {
-    if (/(trop.*cher|troppo.*car|non posso|eccede|non ho|beyond|dépasse)/.test(t)) return 'objection_price';
-    return 'price';
-  }
-  if (/(sconto|remise|riduzion|rabais|abbass|réduct|discount)/.test(t)) return 'discount';
-  if (/(consegna|quando.*arriv|livraison|tempi|délai|quando.*avr|entro quando)/.test(t)) return 'delivery';
-  if (/(certif|garanzi|qualit|norme|haccp|atp|iicl|standard|conform)/.test(t)) return 'quality';
-  if (/(disponibil|avete|stock|l\'avete|ce l\'avez|en stock)/.test(t)) return 'availability';
-  if (/(concorrent|altro.*fornitore|confronto|concurrent|altri prezzi|compare)/.test(t)) return 'competitor';
-  if (/(permesso|autorizzazione|cila|permis|bureaucrazia|réglementation|costruire)/.test(t)) return 'regulation';
-  if (/(installaz|fondament|raccordo|installation|fondation|montage|pose)/.test(t)) return 'installation';
-  if (/(filtraz|corrente|pompa|kw|tecnico|scheda tecnica|specifiche|technique|dimension)/.test(t)) return 'technical';
-  if (/(rimorchio|remorque|mobile|itinerant|spostare|deplacer|patente|permis.*conduire)/.test(t)) return 'mobile';
-  if (/(d'accordo|capito|bene.*proceed|andiamo avanti|procediamo|firmar|accord|décider)/.test(t)) return 'closing';
-  return 'generic';
-}
-
-function buildHintOptions(set: HintSet, type: string): GuidedReplyChoice[] {
-  const options: GuidedReplyChoice[] = [
-    { id: `${type}-best`, text: set.best, quality: 'best' },
-    { id: `${type}-approx`, text: set.approx, quality: 'approx' },
-    { id: `${type}-wrong-1`, text: set.wrong[0], quality: 'wrong' },
-    { id: `${type}-wrong-2`, text: set.wrong[1], quality: 'wrong' },
-  ];
-  // Fisher-Yates shuffle (stable per render via useMemo dependency)
-  for (let i = options.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const tmp = options[i]!;
-    options[i] = options[j]!;
-    options[j] = tmp;
-  }
-  return options;
-}
-
-function getContextualHints(
-  latestClientMsg: { contentIt: string; contentFr: string } | undefined,
-  phaseIndex: number,
-): GuidedReplyChoice[] {
-  if (!latestClientMsg) {
-    const phase = CALL_PHASES[phaseIndex];
-    return buildHintOptions(PHASE_INTRO_HINTS[phase], `phase-${phase}`);
-  }
-  const type = classifyClientMessage(latestClientMsg.contentIt, latestClientMsg.contentFr);
-  const set = HINT_SETS[type] ?? HINT_SETS['generic']!;
-  return buildHintOptions(set, type);
-}
-
-const SCENARIO_DIFFICULTY: Record<string, 'Facile' | 'Moyen' | 'Difficile'> = {
-  'container-20-habitable': 'Facile',
-  'confirmation-commande': 'Facile',
-  'container-stockage-standard': 'Facile',
-  'renouvellement-contrat': 'Moyen',
-  'relance-devis-b2b': 'Moyen',
-  'salon-btp': 'Moyen',
-  'secteur-pharma': 'Moyen',
-  'relance-email-cold': 'Moyen',
-  'piscine-container': 'Moyen',
-  'habitable-autorisation': 'Moyen',
-  'frigo-restauration': 'Moyen',
-  'remorque-mobile': 'Moyen',
-  'prospection-froide': 'Difficile',
-  'objection-budget': 'Difficile',
-  'client-mecontent': 'Difficile',
-  'distributeur-italie': 'Difficile',
-  'client-arnaque': 'Difficile',
-};
 
 type CallStatus = 'ringing' | 'active' | 'ended';
 type CallMode = 'guided' | 'free';
@@ -286,7 +85,6 @@ export default function CallScreen() {
   const scrollRef = useRef<ScrollView>(null);
 
   const {
-    scenarios,
     activeScenario,
     messages,
     corrections,
@@ -294,7 +92,6 @@ export default function CallScreen() {
     isSending,
     error,
     activeScenarioId,
-    setActiveScenarioId,
     sendLearnerReply,
     resetActiveConversation,
   } = useLocalDialogueSession();
@@ -321,14 +118,20 @@ export default function CallScreen() {
 
   useEffect(() => {
     if (!activeScenario || !latestClientMessage) {
-      setAiGuidedHints(null);
-      setIsLoadingGuidedHints(false);
+      queueMicrotask(() => {
+        setAiGuidedHints(null);
+        setIsLoadingGuidedHints(false);
+      });
       return;
     }
 
     let cancelled = false;
-    setAiGuidedHints(null);
-    setIsLoadingGuidedHints(true);
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setAiGuidedHints(null);
+        setIsLoadingGuidedHints(true);
+      }
+    });
 
     const topic = classifyDialogueTopic(
       `${latestClientMessage.contentIt} ${latestClientMessage.contentFr}`,
@@ -385,7 +188,7 @@ export default function CallScreen() {
 
   useEffect(() => {
     if (recorder.state !== 'recording') {
-      setRecordingSeconds(0);
+      queueMicrotask(() => setRecordingSeconds(0));
       return;
     }
 
@@ -404,7 +207,7 @@ export default function CallScreen() {
 
     const timeoutId = setTimeout(() => {
       lastSpokenClientMessageId.current = latestClientMessage.id;
-      tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed, preferDeepgram: true });
+      tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed, preferElevenLabs: true });
     }, 1200);
 
     return () => clearTimeout(timeoutId);
@@ -436,7 +239,7 @@ export default function CallScreen() {
     setXpAwarded(false);
     if (latestClientMessage) {
       lastSpokenClientMessageId.current = latestClientMessage.id;
-      tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed, preferDeepgram: true });
+      tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed, preferElevenLabs: true });
     }
   }, [clientSpeed, latestClientMessage, tts]);
 
@@ -475,22 +278,6 @@ export default function CallScreen() {
     lastSpokenClientMessageId.current = null;
   }, [resetActiveConversation]);
 
-  const handleScenarioChange = useCallback(
-    (scenarioId: string) => {
-      setActiveScenarioId(scenarioId);
-      callStartedAt.current = null;
-      setElapsedSeconds(0);
-      setDraft('');
-      setSelectedGuidedHint(null);
-      setAiGuidedHints(null);
-      setCallStatus('ringing');
-      setXpAwarded(false);
-      setRevealedMessageIds(new Set());
-      lastSpokenClientMessageId.current = null;
-    },
-    [setActiveScenarioId],
-  );
-
   const handleSend = useCallback(async () => {
     const clean = draft.trim();
     if (!clean) return;
@@ -502,7 +289,7 @@ export default function CallScreen() {
 
   const speakClient = useCallback(() => {
     if (!latestClientMessage) return;
-    tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed });
+    tts.speak(latestClientMessage.contentIt, { pitch: 1, rate: 0.86 * clientSpeed, preferElevenLabs: true });
   }, [clientSpeed, latestClientMessage, tts]);
 
   const revealMessage = useCallback(async (messageId: string) => {
@@ -721,74 +508,6 @@ export default function CallScreen() {
         </View>
       )}
     </KeyboardAvoidingView>
-  );
-}
-
-function buildCallReport(corrections: CorrectionRow[]) {
-  const averageScore =
-    corrections.length > 0
-      ? Math.round(corrections.reduce((sum, correction) => sum + correction.score, 0) / corrections.length)
-      : null;
-  const focusCounts = new Map<string, number>();
-
-  for (const correction of corrections) {
-    for (const focus of correction.nextFocus) {
-      focusCounts.set(focus, (focusCounts.get(focus) ?? 0) + 1);
-    }
-  }
-
-  return {
-    averageScore,
-    recurringErrors: [...focusCounts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([label]) => label),
-    bestTurns: corrections
-      .slice()
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 3),
-  };
-}
-
-function ScenarioCard({ scenario, selected, onPress }: { scenario: ScenarioRow; selected: boolean; onPress: () => void }) {
-  const diff = SCENARIO_DIFFICULTY[scenario.id] ?? 'Moyen';
-  const diffColor = diff === 'Facile' ? C.primary : diff === 'Moyen' ? C.orange : C.red;
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`Choisir le scénario ${scenario.title}`}
-      onPress={onPress}
-      style={({ pressed }) => [styles.scenarioCard, selected && styles.scenarioCardSelected, pressed && styles.pressed]}>
-      <View style={styles.scenarioTop}>
-        <Text selectable style={[styles.scenarioLabel, selected && styles.scenarioLabelSelected]}>Scenario</Text>
-        <View style={[styles.diffBadge, { backgroundColor: diffColor + '22', borderColor: diffColor + '55' }]}>
-          <Text style={[styles.diffText, { color: diffColor }]}>{diff}</Text>
-        </View>
-      </View>
-      <Text selectable style={styles.scenarioTitle} numberOfLines={2}>{scenario.title}</Text>
-      <Text selectable style={styles.scenarioGoal} numberOfLines={2}>{scenario.clientGoal}</Text>
-    </Pressable>
-  );
-}
-
-function MissionCard({ scenario }: { scenario: ScenarioRow }) {
-  return (
-    <View style={styles.missionCard}>
-      <View style={styles.missionTop}>
-        <View style={styles.missionIcon}><Text style={styles.missionIconText}>📞</Text></View>
-        <View style={{ flex: 1, gap: 3 }}>
-          <Text selectable style={styles.cardLabel}>Mission</Text>
-          <Text selectable style={styles.missionTitle}>{scenario.clientGoal}</Text>
-        </View>
-      </View>
-      <Text selectable style={styles.personaText} numberOfLines={3}>{scenario.clientPersona}</Text>
-      <View style={styles.criteriaWrap}>
-        {scenario.successCriteria.map((criterion) => (
-          <Text key={criterion} selectable style={styles.criteriaChip}>{criterion}</Text>
-        ))}
-      </View>
-    </View>
   );
 }
 

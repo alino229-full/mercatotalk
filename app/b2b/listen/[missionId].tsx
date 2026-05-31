@@ -24,7 +24,7 @@ import {
   listenActionQuestions,
   type ListenActionQuestion,
 } from '@/data/b2b-operational';
-import { ACCENT_COLORS, getMissionById, type B2BMission } from '@/data/b2b-missions';
+import { getMissionById, type B2BMission } from '@/data/b2b-missions';
 import { addXp, insertLearningSession } from '@/database/italpro-local-db';
 import { successFeedback, tapFeedback, warningFeedback } from '@/services/haptics';
 import { speakIt } from '@/services/italian-tts';
@@ -73,7 +73,6 @@ export default function ListenExerciseScreen() {
 
 function ListenContent({ mission }: { mission: B2BMission }) {
   const insets = useSafeAreaInsets();
-  const accent = ACCENT_COLORS[mission.accent];
 
   const [wordHighlight, setWordHighlight] = useState(-1);
   const [listenIndex, setListenIndex] = useState(0);
@@ -94,7 +93,9 @@ function ListenContent({ mission }: { mission: B2BMission }) {
 
   useEffect(() => {
     let cancelled = false;
-    setQuestionsLoading(true);
+    queueMicrotask(() => {
+      if (!cancelled) setQuestionsLoading(true);
+    });
     generateListenQuestions(mission).then((result) => {
       if (cancelled) return;
       setGeneratedQuestions(result);

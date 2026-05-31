@@ -134,10 +134,10 @@ function LessonNodeBase({
         <Pressable
           disabled={locked}
           onPressIn={() => {
-            press.value = withTiming(1, { duration: 70 });
+            press.set(withTiming(1, { duration: 70 }));
           }}
           onPressOut={() => {
-            press.value = withSpring(0, { damping: 14, stiffness: 320 });
+            press.set(withSpring(0, { damping: 14, stiffness: 320 }));
           }}
           onPress={onPress}>
           <Animated.View

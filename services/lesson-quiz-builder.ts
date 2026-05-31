@@ -91,6 +91,8 @@ export function normaliseAnswer(value: string): string {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[’`]/g, "'")
+    .replace(/\s*\/\s*/g, '/')
     .replace(/[.,!?;:'"()\-]/g, '')
     .replace(/\s+/g, ' ')
     .trim();

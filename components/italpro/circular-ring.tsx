@@ -55,7 +55,7 @@ export function CircularRing({
       {/* Track: full filled disk in track color (will be hidden behind donut hole except where progress doesn't reach) */}
       <View
         style={[
-          StyleSheet.absoluteFillObject,
+          StyleSheet.absoluteFill,
           { backgroundColor: trackColor, borderRadius: half },
         ]}
       />
@@ -128,7 +128,7 @@ export function CircularRing({
       {/* Center content */}
       <View
         style={[
-          StyleSheet.absoluteFillObject,
+          StyleSheet.absoluteFill,
           { alignItems: 'center', justifyContent: 'center' },
         ]}>
         {children}

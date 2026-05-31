@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   FadeIn,
@@ -10,6 +10,7 @@ import Animated, {
 
 import type { QuizQuestion } from '@/services/lesson-quiz';
 import { successFeedback, warningFeedback } from '@/services/haptics';
+import { playQuizSound, preloadQuizSounds } from '@/services/quiz-sounds';
 
 const C = {
   text: '#F4F5F7',
@@ -39,19 +40,29 @@ export function QuizRunner({
   const total = questions.length;
   const question = questions[index];
 
+  useEffect(() => {
+    preloadQuizSounds();
+  }, []);
+
   const answer = useCallback(
     (choice: string) => {
       if (selected || !question) return;
       setSelected(choice);
       const ok = choice === question.correct;
       const nextCorrect = correct + (ok ? 1 : 0);
-      if (ok) successFeedback();
-      else warningFeedback();
+      if (ok) {
+        playQuizSound('correct');
+        successFeedback();
+      } else {
+        playQuizSound('wrong');
+        warningFeedback();
+      }
 
       setTimeout(() => {
         if (index + 1 >= total) {
           const score = Math.round((nextCorrect / total) * 100);
           setCorrect(nextCorrect);
+          playQuizSound(score >= 80 ? 'bravo' : 'complete');
           onComplete(score, score >= passThreshold);
         } else {
           setCorrect(nextCorrect);
