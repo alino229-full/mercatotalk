@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -53,19 +53,15 @@ export default function LearnScreen() {
   );
 
   const { states, resumeId } = useMemo(() => computePathState(completedSet), [completedSet]);
-  const resumeIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    resumeIdRef.current = resumeId;
-  }, [resumeId]);
 
   const reload = useCallback(async () => {
     await ensureLessonProgressSeed(allGateIds);
-    setProgress(await getLessonProgress());
+    const rows = await getLessonProgress();
+    setProgress(rows);
+    return rows;
   }, []);
 
-  const scrollToResume = useCallback((animated: boolean) => {
-    const id = resumeIdRef.current;
+  const scrollToNode = useCallback((id: string | null, animated: boolean) => {
     if (!id) return;
     const target = nodeRefs.current.get(id);
     const content = contentRef.current;
@@ -85,14 +81,16 @@ export default function LearnScreen() {
   useFocusEffect(
     useCallback(() => {
       let active = true;
-      reload().then(() => {
+      reload().then((rows) => {
         if (!active) return;
-        setTimeout(() => scrollToResume(true), 250);
+        const completed = new Set(rows.filter((r) => r.status === 'completed').map((r) => r.lessonId));
+        const nextResumeId = computePathState(completed).resumeId;
+        setTimeout(() => scrollToNode(nextResumeId, true), 250);
       });
       return () => {
         active = false;
       };
-    }, [reload, scrollToResume]),
+    }, [reload, scrollToNode]),
   );
 
   const handleNodePress = useCallback(

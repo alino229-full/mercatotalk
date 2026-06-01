@@ -99,7 +99,10 @@ function ListenContent({ mission }: { mission: B2BMission }) {
     generateListenQuestions(mission).then((result) => {
       if (cancelled) return;
       setGeneratedQuestions(result);
-      setQuestionsLoading(false);
+    }).catch(() => {
+      if (!cancelled) setGeneratedQuestions(null);
+    }).finally(() => {
+      if (!cancelled) setQuestionsLoading(false);
     });
     return () => { cancelled = true; };
   }, [mission.id]); // eslint-disable-line react-hooks/exhaustive-deps

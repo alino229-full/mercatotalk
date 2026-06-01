@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { getSm2Stats, getStreak, getTodayStats } from '@/database/italpro-local-db';
 
@@ -20,6 +20,7 @@ export type DailyStats = {
  * that absolutely need the loaded flag can still react to it.
  */
 export function useDailyStats(): DailyStats {
+  const mountedRef = useRef(false);
   const [streak, setStreak] = useState(0);
   const [minutesToday, setMinutesToday] = useState(0);
   const [dueCards, setDueCards] = useState(0);
@@ -33,6 +34,7 @@ export function useDailyStats(): DailyStats {
       getTodayStats(),
       getSm2Stats(),
     ]);
+    if (!mountedRef.current) return;
     setStreak(streakVal);
     setMinutesToday(todayStats.minutesToday);
     setDueCards(sm2Stats.dueCount);
@@ -42,7 +44,11 @@ export function useDailyStats(): DailyStats {
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     load();
+    return () => {
+      mountedRef.current = false;
+    };
   }, [load]);
 
   return { streak, minutesToday, dueCards, totalCards, masteredCards, isLoading, reload: load };

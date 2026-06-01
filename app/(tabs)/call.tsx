@@ -106,6 +106,7 @@ export default function CallScreen() {
     () => [...messages].reverse().find((message) => message.role === 'client'),
     [messages],
   );
+  const previousScenarioId = useRef(activeScenarioId);
   const phaseIndex = Math.min(CALL_PHASES.length - 1, Math.floor(learnerTurns / 2));
   const report = useMemo(() => buildCallReport(corrections), [corrections]);
   const contextualHints = useMemo(
@@ -115,6 +116,26 @@ export default function CallScreen() {
   );
   const guidedHints = aiGuidedHints ?? contextualHints;
   const isUsingAiGuidedHints = aiGuidedHints !== null;
+
+  useEffect(() => {
+    if (previousScenarioId.current === activeScenarioId) return;
+    previousScenarioId.current = activeScenarioId;
+    tts.stop();
+    callStartedAt.current = null;
+    recordingStartedAt.current = null;
+    lastSpokenClientMessageId.current = null;
+    setCallStatus('ringing');
+    setElapsedSeconds(0);
+    setDraft('');
+    setVoiceError(null);
+    setSelectedGuidedHint(null);
+    setAiGuidedHints(null);
+    setIsLoadingGuidedHints(false);
+    setCheatDraft('');
+    setCheatIt('');
+    setXpAwarded(false);
+    setRevealedMessageIds(new Set());
+  }, [activeScenarioId, tts]);
 
   useEffect(() => {
     if (!activeScenario || !latestClientMessage) {

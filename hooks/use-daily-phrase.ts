@@ -59,6 +59,12 @@ function getDayContextIndex(): number {
   return dayOfYear % CONTEXTS.length;
 }
 
+function buildFallbackDailyPhrase(): DailyPhrase {
+  const idx = getDayContextIndex();
+  const base = FALLBACK_POOL[idx % FALLBACK_POOL.length]!;
+  return { ...base, date: getTodayString() };
+}
+
 function getApiBaseUrl(): string | null {
   const url = process.env.EXPO_PUBLIC_ITALPRO_API_URL ?? process.env.EXPO_PUBLIC_ITALPRO_AI_URL;
   return getExpoApiBaseUrl(url);
@@ -98,8 +104,8 @@ export type DailyPhraseState = {
 
 export function useDailyPhrase(): DailyPhraseState {
   const [state, setState] = useState<DailyPhraseState>({
-    phrase: null,
-    isLoading: true,
+    phrase: buildFallbackDailyPhrase(),
+    isLoading: false,
     isAiGenerated: false,
   });
 
@@ -107,7 +113,8 @@ export function useDailyPhrase(): DailyPhraseState {
     let cancelled = false;
 
     async function load() {
-      // 1 — Cache DB valide pour aujourd'hui
+      // 1 — Cache DB valide pour aujourd'hui. L'UI affiche déjà un fallback
+      // local, donc cette lecture ne bloque pas le premier rendu.
       const cached = await getDailyPhrase();
       if (cached) {
         if (!cancelled) setState({ phrase: cached, isLoading: false, isAiGenerated: true });
@@ -123,21 +130,22 @@ export function useDailyPhrase(): DailyPhraseState {
       const aiPhrase = await fetchPhraseFromApi(context, contextEmoji, today);
       if (aiPhrase && !cancelled) {
         await saveDailyPhrase(aiPhrase);
+        if (cancelled) return;
         setState({ phrase: aiPhrase, isLoading: false, isAiGenerated: true });
         return;
       }
 
       // 4 — Fallback local déterministe (pas de réseau ou pas de clé)
       if (!cancelled) {
-        const base = FALLBACK_POOL[idx % FALLBACK_POOL.length]!;
-        const fallback: DailyPhrase = { ...base, date: today };
+        const fallback = buildFallbackDailyPhrase();
         await saveDailyPhrase(fallback);
+        if (cancelled) return;
         setState({ phrase: fallback, isLoading: false, isAiGenerated: false });
       }
     }
 
     load().catch(() => {
-      if (!cancelled) setState({ phrase: null, isLoading: false, isAiGenerated: false });
+      if (!cancelled) setState({ phrase: buildFallbackDailyPhrase(), isLoading: false, isAiGenerated: false });
     });
 
     return () => {

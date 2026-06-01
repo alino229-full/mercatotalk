@@ -24,6 +24,7 @@ const SOUND_VOLUMES: Record<QuizSound, number> = {
 };
 
 const activePlayers = new Set<AudioPlayer>();
+let preloadStarted = false;
 
 function releasePlayer(player: AudioPlayer): void {
   if (!activePlayers.has(player)) return;
@@ -60,6 +61,8 @@ export function playQuizSound(sound: QuizSound): void {
 }
 
 export function preloadQuizSounds(): void {
+  if (preloadStarted) return;
+  preloadStarted = true;
   for (const source of Object.values(SOUND_SOURCES)) {
     Promise.resolve(preload(source)).catch(() => null);
   }

@@ -67,19 +67,26 @@ export function useLocalDialogueSession(): LocalDialogueSession {
     setError(null);
 
     try {
-      const loadedScenarios = await getScenarios();
-      const scenario = await getScenarioById(activeScenarioId);
+      const [loadedScenarios, scenario] = await Promise.all([
+        getScenarios(),
+        getScenarioById(activeScenarioId),
+      ]);
 
       if (!scenario) {
         throw new Error('Scenario local introuvable.');
       }
 
       await ensureConversationStarted(scenario);
+      const [loadedMessages, loadedLatestCorrection, loadedCorrections] = await Promise.all([
+        getMessages(scenario.id),
+        getLatestCorrection(scenario.id),
+        getCorrectionsForScenario(scenario.id),
+      ]);
       setScenarios(loadedScenarios);
       setActiveScenario(scenario);
-      setMessages(await getMessages(scenario.id));
-      setLatestCorrection(await getLatestCorrection(scenario.id));
-      setCorrections(await getCorrectionsForScenario(scenario.id));
+      setMessages(loadedMessages);
+      setLatestCorrection(loadedLatestCorrection);
+      setCorrections(loadedCorrections);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : 'Erreur locale inconnue.');
     } finally {
@@ -171,9 +178,14 @@ export function useLocalDialogueSession(): LocalDialogueSession {
           contentFr: clientReply.contentFr,
           coachingNote: clientReply.coachingNote,
         });
-        setMessages(await getMessages(activeScenario.id));
-        setLatestCorrection(await getLatestCorrection(activeScenario.id));
-        setCorrections(await getCorrectionsForScenario(activeScenario.id));
+        const [nextMessages, nextLatestCorrection, nextCorrections] = await Promise.all([
+          getMessages(activeScenario.id),
+          getLatestCorrection(activeScenario.id),
+          getCorrectionsForScenario(activeScenario.id),
+        ]);
+        setMessages(nextMessages);
+        setLatestCorrection(nextLatestCorrection);
+        setCorrections(nextCorrections);
       } catch (caughtError) {
         setError(caughtError instanceof Error ? caughtError.message : 'Impossible d enregistrer ce tour.');
       } finally {

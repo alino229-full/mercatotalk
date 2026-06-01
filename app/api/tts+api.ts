@@ -1,5 +1,10 @@
 import { getServerEnv } from '@/services/server-env';
 
+import {
+  DEFAULT_ITALIAN_DEEPGRAM_MODEL,
+  normalizeItalianDeepgramModel,
+} from '@/services/tts-models';
+
 type TtsRequest = {
   text?: string;
   provider?: 'deepgram' | 'elevenlabs';
@@ -19,9 +24,7 @@ const corsHeaders = {
 
 const DEEPGRAM_SPEAK_URL = 'https://api.deepgram.com/v1/speak';
 const ELEVENLABS_SPEAK_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
-const DEFAULT_MODEL = 'aura-2-cesare-it';
 const DEFAULT_ELEVENLABS_MODEL = 'eleven_multilingual_v2';
-const ITALIAN_MODEL_RE = /^aura-2-[a-z0-9-]+-it$/i;
 const ELEVENLABS_ID_RE = /^[a-zA-Z0-9_-]{8,80}$/;
 // Deepgram caps Aura requests at 2000 characters per call.
 const MAX_CHARS = 2000;
@@ -73,11 +76,17 @@ async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Pro
   let lastError: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
-      return await fetch(url, init);
+      const response = await fetch(url, init);
+      if (!shouldRetryResponse(response) || i === attempts - 1) {
+        return response;
+      }
+      await sleep(getRetryDelayMs(response, i));
     } catch (err) {
       lastError = err;
       // Backoff: 150ms, 400ms before the next try.
-      await new Promise((r) => setTimeout(r, i === 0 ? 150 : 400));
+      if (i < attempts - 1) {
+        await sleep(i === 0 ? 150 : 400);
+      }
     }
   }
   throw lastError;
@@ -100,10 +109,10 @@ export async function POST(request: Request) {
     }
 
     if (body.provider === 'elevenlabs') {
-      return fetchElevenLabsSpeech(text, body);
+      return await fetchElevenLabsSpeech(text, body);
     }
 
-    return fetchDeepgramSpeech(text, body);
+    return await fetchDeepgramSpeech(text, body);
   } catch (error) {
     return Response.json(
       { error: 'Erreur serveur tts.', detail: error instanceof Error ? error.message : 'Erreur inconnue' },
@@ -122,7 +131,9 @@ async function fetchDeepgramSpeech(text: string, body: TtsRequest): Promise<Resp
     );
   }
 
-  const model = normalizeItalianModel(body.model ?? getServerEnv('DEEPGRAM_TTS_MODEL') ?? DEFAULT_MODEL);
+  const model = normalizeItalianDeepgramModel(
+    body.model ?? getServerEnv('DEEPGRAM_TTS_MODEL') ?? DEFAULT_ITALIAN_DEEPGRAM_MODEL,
+  );
   // WAV (RIFF + explicit length) plays fully on expo-audio. The `mp3` encoding
   // returns raw ADTS frames with no duration header, which truncates short
   // clips on Android (reads "pa" of "pane" then stops).
@@ -229,11 +240,24 @@ async function fetchElevenLabsSpeech(text: string, body: TtsRequest): Promise<Re
   });
 }
 
-function normalizeItalianModel(model: string): string {
-  return ITALIAN_MODEL_RE.test(model) ? model : DEFAULT_MODEL;
-}
-
 function normalizeElevenLabsId(id: string | undefined): string | null {
   const trimmed = id?.trim();
   return trimmed && ELEVENLABS_ID_RE.test(trimmed) ? trimmed : null;
+}
+
+function shouldRetryResponse(response: Response): boolean {
+  return response.status === 429 || [500, 502, 503, 504].includes(response.status);
+}
+
+function getRetryDelayMs(response: Response, attempt: number): number {
+  const retryAfter = response.headers.get('Retry-After');
+  const retryAfterSeconds = retryAfter ? Number.parseInt(retryAfter, 10) : Number.NaN;
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return Math.min(retryAfterSeconds * 1000, 2_500);
+  }
+  return attempt === 0 ? 350 : 900;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

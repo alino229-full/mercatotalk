@@ -51,15 +51,6 @@ export default function HomeScreen() {
   const [dailyGoal, setDailyGoalState] = useState<DailyGoal>(50);
   const [dailyXpEarned, setDailyXpEarned] = useState(0);
 
-  const loadDailyGoal = useCallback(async () => {
-    const [goalStr, earned] = await Promise.all([
-      getDailySetting('daily_goal', '50'),
-      getDailyXpEarned(),
-    ]);
-    setDailyGoalState((parseInt(goalStr, 10) as DailyGoal) || 50);
-    setDailyXpEarned(earned);
-  }, []);
-
   const cycleGoal = useCallback(async () => {
     const idx = DAILY_GOALS.indexOf(dailyGoal);
     const next = DAILY_GOALS[(idx + 1) % DAILY_GOALS.length]!;
@@ -69,9 +60,20 @@ export default function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      let active = true;
       reload();
-      loadDailyGoal();
-    }, [reload, loadDailyGoal]),
+      Promise.all([
+        getDailySetting('daily_goal', '50'),
+        getDailyXpEarned(),
+      ]).then(([goalStr, earned]) => {
+        if (!active) return;
+        setDailyGoalState((parseInt(goalStr, 10) as DailyGoal) || 50);
+        setDailyXpEarned(earned);
+      }).catch(() => null);
+      return () => {
+        active = false;
+      };
+    }, [reload]),
   );
 
   const speakPhrase = useCallback(() => {

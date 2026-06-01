@@ -14,6 +14,7 @@ import {
 import { fetchGroqQuizItems } from '@/services/groq-quiz-client';
 import { errorFeedback, successFeedback, warningFeedback } from '@/services/haptics';
 import { speakIt, stopIt } from '@/services/italian-tts';
+import { normaliseAnswer as normalizeAnswer } from '@/services/lesson-quiz-builder';
 import { playQuizSound, preloadQuizSounds } from '@/services/quiz-sounds';
 import { transcribeLocalAudio } from '@/services/transcription-client';
 
@@ -252,18 +253,6 @@ function detectWeakCategories(results: QuizResult[]): string[] {
     .map(([cat]) => cat);
 }
 
-function normalizeAnswer(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[’`]/g, "'")
-    .replace(/\s*\/\s*/g, '/')
-    .replace(/[?!.,;:¡¿]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 function getExpectedAnswerText(question: QuizQuestion): string {
   return question.choices.find((choice) => choice.id === question.correctId)?.label ?? question.it;
 }
@@ -322,6 +311,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
   const resultsRef = useRef<QuizResult[]>([]);
   const answeredRef = useRef(false);
   const comboRef = useRef(0);
+  const hasStartedRef = useRef(false);
 
   const setQuestionTime = useCallback((question: QuizQuestion | undefined, nextHardMode = hardMode) => {
     const nextLimit = question ? estimateQuestionTimeSeconds(question, nextHardMode) : DEFAULT_QUESTION_TIME_SECONDS;
@@ -522,23 +512,33 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
     setTotalXpAwarded(0);
     setCombo(0);
     answeredRef.current = false;
+    hasStartedRef.current = false;
     sessionStart.current = Date.now();
 
-    // Fetch due cards to prioritize them in the series
-    const dueSm2Cards = await getDueCards(seriesSize).catch(() => []);
-    const dueItems: QuizBankItem[] = dueSm2Cards.map((c) => ({
-      id: `sm2-${c.id}`,
-      it: c.frontIt,
-      fr: c.frontFr,
-      phonetic: c.phonetic ?? undefined,
-      category: c.category,
-    }));
-
-    const localSeries = buildSeries(pool, seriesSize, dueItems);
+    const localSeries = buildSeries(pool, seriesSize);
     questionsRef.current = localSeries;
     setQuestions(localSeries);
     setQuestionTime(localSeries[0]);
     setSource('local');
+
+    getDueCards(seriesSize)
+      .then((dueSm2Cards) => {
+        if (hasStartedRef.current) return;
+        const dueItems: QuizBankItem[] = dueSm2Cards.map((c) => ({
+          id: `sm2-${c.id}`,
+          it: c.frontIt,
+          fr: c.frontFr,
+          phonetic: c.phonetic ?? undefined,
+          category: c.category,
+        }));
+        if (dueItems.length === 0) return;
+        const dueSeries = buildSeries(pool, seriesSize, dueItems);
+        if (dueSeries.length === 0 || hasStartedRef.current) return;
+        questionsRef.current = dueSeries;
+        setQuestions(dueSeries);
+        setQuestionTime(dueSeries[0]);
+      })
+      .catch(() => null);
 
     setIsGroqLoading(true);
     const weakCats = previousResults ? detectWeakCategories(previousResults) : [];
@@ -575,6 +575,7 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
   const startSession = useCallback(() => {
     if (questionsRef.current.length === 0) return;
     playQuizSound('tap');
+    hasStartedRef.current = true;
     setHasStarted(true);
     setIsPaused(false);
     sessionStart.current = Date.now();
@@ -605,13 +606,24 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
 
   useEffect(() => {
     preloadQuizSounds();
+    let cancelled = false;
+
     (async () => {
       setIsLoading(true);
-      const [sm2Cards, bankItems, cachedDbItems] = await Promise.all([
+
+      const bankItems = await getAllQuizItems();
+      if (cancelled) return;
+      setLocalPool(bankItems);
+      setTotalItems(bankItems.length);
+      await startNewSeries(bankItems);
+      if (cancelled) return;
+      setIsLoading(false);
+
+      const [sm2Cards, cachedDbItems] = await Promise.all([
         getAllCards(),
-        getAllQuizItems(),
         getCachedQuizItems().catch(() => []),
       ]);
+      if (cancelled) return;
 
       const sm2Items: QuizBankItem[] = sm2Cards.map((c) => ({
         id: `sm2-${c.id}`,
@@ -633,10 +645,13 @@ export function useQuizSession(options: QuizSessionOptions = {}): QuizSessionSta
       const merged = shuffle([...sm2Items, ...bankItems, ...cachedItems]);
       setLocalPool(merged);
       setTotalItems(merged.length);
+    })().catch(() => {
+      if (!cancelled) setIsLoading(false);
+    });
 
-      await startNewSeries(merged);
-      setIsLoading(false);
-    })();
+    return () => {
+      cancelled = true;
+    };
   }, [startNewSeries]);
 
   useEffect(() => () => {

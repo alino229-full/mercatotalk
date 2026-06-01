@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { achievements, type Achievement } from '@/data/achievements';
 import {
@@ -23,13 +23,16 @@ export type XpState = {
 };
 
 export function useXp(): XpState {
+  const mountedRef = useRef(false);
   const [profile, setProfile] = useState<XpProfileRow | null>(null);
   const [unlockedIds, setUnlockedIds] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
 
   const reload = useCallback(async () => {
+    if (!mountedRef.current) return;
     setIsLoading(true);
     const [xpProfile, rows] = await Promise.all([getXpProfile(), getUnlockedAchievements()]);
+    if (!mountedRef.current) return;
     setProfile(xpProfile);
     setUnlockedIds(new Set(rows.map((row) => row.achievementId)));
     setIsLoading(false);
@@ -63,7 +66,15 @@ export function useXp(): XpState {
   }, [reload]);
 
   useEffect(() => {
-    reload().then(checkPassiveAchievements).catch(() => setIsLoading(false));
+    mountedRef.current = true;
+    reload()
+      .then(checkPassiveAchievements)
+      .catch(() => {
+        if (mountedRef.current) setIsLoading(false);
+      });
+    return () => {
+      mountedRef.current = false;
+    };
   }, [checkPassiveAchievements, reload]);
 
   const unlocked = useMemo(

@@ -24,6 +24,7 @@ import type { Voice } from 'expo-speech';
 import { Platform } from 'react-native';
 
 import { getExpoApiBaseUrl } from '@/services/api-base-url';
+import { normalizeItalianDeepgramModel } from '@/services/tts-models';
 
 export const ITALIAN_TTS_WORKER_URL =
   process.env.EXPO_PUBLIC_ITALPRO_TTS_URL ?? 'https://italpro-tts.italpro-tts.workers.dev';
@@ -40,7 +41,6 @@ const CACHE_DIR_NAME = 'tts-cache';
 const FETCH_TIMEOUT_MS = 12_000;
 const IS_WEB = Platform.OS === 'web';
 const WORKER_ENABLED = process.env.EXPO_PUBLIC_ITALPRO_TTS_ENABLE_WORKER === '1';
-const ITALIAN_DEEPGRAM_MODEL_RE = /^aura-2-[a-z0-9-]+-it$/i;
 
 export type ItalianVoice =
   | 'it-IT-IsabellaNeural'  // F · cordiale (default)
@@ -487,7 +487,7 @@ function shouldUseWorker(opts: SpeakOptions): boolean {
 }
 
 function normalizeDeepgramModel(model: string): string {
-  return ITALIAN_DEEPGRAM_MODEL_RE.test(model) ? model : 'aura-2-cesare-it';
+  return normalizeItalianDeepgramModel(model);
 }
 
 function getItalianDeviceVoice(): Promise<string | undefined> {
