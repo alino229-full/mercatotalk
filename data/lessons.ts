@@ -1,9 +1,71 @@
+import { grammarLessons } from '@/data/grammar-lessons';
+
 export type VocabItem = {
   it: string;
   fr: string;
   phonetic?: string;
   example?: string;
 };
+
+export type LessonConceptExample = {
+  it: string;
+  fr: string;
+  note?: string;
+};
+
+export type LessonConcept = {
+  id: string;
+  title: string;
+  rule: string;
+  why: string;
+  pattern?: string;
+  examples: LessonConceptExample[];
+  memoryTip?: string;
+};
+
+export type GrammarDrill =
+  | {
+      id: string;
+      type: 'ending-choice';
+      title: string;
+      prompt: string;
+      before: string;
+      after?: string;
+      choices: string[];
+      answer: string;
+      translation?: string;
+      explanation: string;
+      speakText?: string;
+    }
+  | {
+      id: string;
+      type: 'cloze';
+      title: string;
+      prompt: string;
+      before: string;
+      after: string;
+      choices: string[];
+      answer: string;
+      translation?: string;
+      explanation: string;
+      speakText?: string;
+    }
+  | {
+      id: string;
+      type: 'agreement-table';
+      title: string;
+      prompt: string;
+      choices: string[];
+      rows: Array<{
+        id: string;
+        before: string;
+        after?: string;
+        answer: string;
+        translation?: string;
+      }>;
+      explanation: string;
+      speakText?: string;
+    };
 
 export type LessonDetail = {
   id: string;
@@ -12,6 +74,8 @@ export type LessonDetail = {
   icon: string;
   grammarTip?: string;
   grammarExercises?: GrammarExercise[];
+  concepts?: LessonConcept[];
+  drills?: GrammarDrill[];
   vocab: VocabItem[];
 };
 
@@ -23,7 +87,7 @@ export type GrammarExercise = {
   hint?: string;
 };
 
-export const lessonDetails: LessonDetail[] = [
+const coreLessonDetails: LessonDetail[] = [
 
   // ╔══════════════════════════════════════════════════════════════╗
   // ║  PHASE PRONO — Prononciation italienne                       ║
@@ -1755,3 +1819,5 @@ export const lessonDetails: LessonDetail[] = [
     ],
   },
 ];
+
+export const lessonDetails: LessonDetail[] = [...coreLessonDetails, ...grammarLessons];

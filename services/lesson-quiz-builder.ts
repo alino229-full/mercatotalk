@@ -1,4 +1,4 @@
-import type { LessonDetail, VocabItem } from '@/data/lessons';
+import type { GrammarDrill, LessonDetail, VocabItem } from '@/data/lessons';
 
 /**
  * Generates a varied, animated quiz from a lesson's vocabulary.
@@ -15,7 +15,15 @@ import type { LessonDetail, VocabItem } from '@/data/lessons';
  * available, so a lesson quiz is never "too easy".
  */
 
-export type QuizQuestionType = 'translate' | 'listen' | 'match' | 'build' | 'type';
+export type QuizQuestionType =
+  | 'translate'
+  | 'listen'
+  | 'match'
+  | 'build'
+  | 'type'
+  | 'ending-choice'
+  | 'cloze'
+  | 'agreement-table';
 
 type BaseQuestion = {
   id: string;
@@ -67,12 +75,54 @@ export type TypeQuestion = BaseQuestion & {
   timerSeconds: number;
 };
 
+export type EndingChoiceQuestion = BaseQuestion & {
+  type: 'ending-choice';
+  title: string;
+  prompt: string;
+  before: string;
+  after?: string;
+  correct: string;
+  choices: string[];
+  translation?: string;
+  explanation: string;
+};
+
+export type ClozeQuestion = BaseQuestion & {
+  type: 'cloze';
+  title: string;
+  prompt: string;
+  before: string;
+  after: string;
+  correct: string;
+  choices: string[];
+  translation?: string;
+  explanation: string;
+};
+
+export type AgreementTableQuestion = BaseQuestion & {
+  type: 'agreement-table';
+  title: string;
+  prompt: string;
+  choices: string[];
+  rows: Array<{
+    id: string;
+    before: string;
+    after?: string;
+    correct: string;
+    translation?: string;
+  }>;
+  explanation: string;
+};
+
 export type QuizQuestion =
   | TranslateQuestion
   | ListenQuestion
   | MatchQuestion
   | BuildQuestion
-  | TypeQuestion;
+  | TypeQuestion
+  | EndingChoiceQuestion
+  | ClozeQuestion
+  | AgreementTableQuestion;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -165,15 +215,67 @@ function tokenizeSentence(sentence: string): string[] {
     .filter((token) => token.length > 0);
 }
 
+function drillToQuestion(lessonId: string, drill: GrammarDrill): QuizQuestion {
+  if (drill.type === 'ending-choice') {
+    return {
+      id: `${lessonId}-${drill.id}`,
+      type: 'ending-choice',
+      title: drill.title,
+      prompt: drill.prompt,
+      before: drill.before,
+      after: drill.after,
+      correct: drill.answer,
+      choices: shuffle(drill.choices),
+      translation: drill.translation,
+      explanation: drill.explanation,
+      speakText: drill.speakText,
+    };
+  }
+
+  if (drill.type === 'cloze') {
+    return {
+      id: `${lessonId}-${drill.id}`,
+      type: 'cloze',
+      title: drill.title,
+      prompt: drill.prompt,
+      before: drill.before,
+      after: drill.after,
+      correct: drill.answer,
+      choices: shuffle(drill.choices),
+      translation: drill.translation,
+      explanation: drill.explanation,
+      speakText: drill.speakText,
+    };
+  }
+
+  return {
+    id: `${lessonId}-${drill.id}`,
+    type: 'agreement-table',
+    title: drill.title,
+    prompt: drill.prompt,
+    choices: drill.choices,
+    rows: drill.rows.map((row) => ({
+      id: row.id,
+      before: row.before,
+      after: row.after,
+      correct: row.answer,
+      translation: row.translation,
+    })),
+    explanation: drill.explanation,
+    speakText: drill.speakText,
+  };
+}
+
 // ─── Builder ──────────────────────────────────────────────────────────────────
 
 export function buildLessonQuiz(lesson: LessonDetail): QuizQuestion[] {
   const vocab = lesson.vocab.filter(isUsable);
-  if (vocab.length === 0) return [];
+  const drillQuestions = (lesson.drills ?? []).map((drill) => drillToQuestion(lesson.id, drill));
+  if (vocab.length === 0) return drillQuestions;
 
   const frPool = vocab.map((v) => cleanMeaning(v.fr));
   const itPool = vocab.map((v) => v.it.trim());
-  const questions: QuizQuestion[] = [];
+  const questions: QuizQuestion[] = [...drillQuestions];
 
   // Candidate sentences for "build" questions (short, multi-word examples).
   const sentenceItems = vocab.filter((v) => {

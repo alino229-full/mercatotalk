@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeInDown, FadeInUp } from 'react-native-reanimated';
 
 import { LessonQuiz } from '@/components/learn/lesson-quiz';
-import { lessonDetails, type LessonDetail } from '@/data/lessons';
+import { lessonDetails, type LessonConcept, type LessonDetail } from '@/data/lessons';
 import { phases } from '@/data/italpro';
 import {
   addXp,
@@ -24,6 +24,7 @@ import {
 import { useItalianTTS } from '@/hooks/use-italian-tts';
 import { useVoiceRecorder } from '@/hooks/use-voice-recorder';
 import { buildLessonQuiz, speakableIt } from '@/services/lesson-quiz-builder';
+import { fetchLessonQuizVariations, hasLessonQuizAiAvailable } from '@/services/lesson-quiz-ai-client';
 import { successFeedback, warningFeedback } from '@/services/haptics';
 import { hasSpeechProxy } from '@/services/speech-ai-client';
 import { transcribeLocalAudio } from '@/services/transcription-client';
@@ -65,11 +66,32 @@ export default function LessonScreen() {
     () => phases.find((p) => p.id === lesson?.phaseId)?.accentColor ?? C.primary,
     [lesson],
   );
-  const quiz = useMemo(() => (lesson ? buildLessonQuiz(lesson) : []), [lesson]);
+  const staticQuiz = useMemo(() => (lesson ? buildLessonQuiz(lesson) : []), [lesson]);
 
   const [mode, setMode] = useState<Mode>('study');
   const [score, setScore] = useState<number | null>(null);
+  const [aiQuiz, setAiQuiz] = useState<{ lessonId: string; questions: typeof staticQuiz } | null>(null);
   const tts = useItalianTTS();
+  const aiQuestions = aiQuiz && aiQuiz.lessonId === lesson?.id ? aiQuiz.questions : null;
+  const quiz = aiQuestions?.length ? aiQuestions : staticQuiz;
+  const isAiQuiz = Boolean(aiQuestions?.length);
+
+  useEffect(() => {
+    if (!lesson || !hasLessonQuizAiAvailable()) return;
+
+    let cancelled = false;
+    fetchLessonQuizVariations(lesson, 5).then((questions) => {
+      if (cancelled || !questions?.length) return;
+      setAiQuiz({
+        lessonId: lesson.id,
+        questions: [...questions, ...staticQuiz].slice(0, Math.max(6, Math.min(staticQuiz.length + 2, 10))),
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [lesson, staticQuiz]);
 
   const handleComplete = useCallback(
     async (finalScore: number) => {
@@ -164,11 +186,23 @@ export default function LessonScreen() {
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>{lesson.title}</Text>
-          <Text style={styles.headerSub}>{lesson.vocab.length} mots · quiz {quiz.length} questions</Text>
+          <Text style={styles.headerSub}>
+            {lesson.vocab.length} mots · quiz {quiz.length} questions{isAiQuiz ? ' · variation IA' : ''}
+          </Text>
         </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        {lesson.concepts?.length ? (
+          <View style={styles.conceptStack}>
+            {lesson.concepts.map((concept, idx) => (
+              <Animated.View key={concept.id} entering={FadeInDown.delay(idx * 45).duration(300)}>
+                <ConceptCard concept={concept} accent={accent} />
+              </Animated.View>
+            ))}
+          </View>
+        ) : null}
+
         {lesson.grammarTip ? (
           <Animated.View entering={FadeInDown.duration(300)} style={[styles.tip, { borderLeftColor: accent }]}>
             <Text style={[styles.tipLabel, { color: accent }]}>💡 Astuce</Text>
@@ -191,6 +225,53 @@ export default function LessonScreen() {
           <Text style={styles.primaryBtnText}>Commencer le quiz</Text>
         </Pressable>
       </View>
+    </View>
+  );
+}
+
+function ConceptCard({ concept, accent }: { concept: LessonConcept; accent: string }) {
+  return (
+    <View style={[styles.conceptCard, { borderColor: accent + '30' }]}>
+      <View style={styles.conceptHeader}>
+        <View style={[styles.conceptBadge, { backgroundColor: accent + '18' }]}>
+          <Text style={[styles.conceptBadgeText, { color: accent }]}>REGLE</Text>
+        </View>
+        <Text selectable style={styles.conceptTitle}>{concept.title}</Text>
+      </View>
+
+      <Text selectable style={styles.conceptRule}>{concept.rule}</Text>
+
+      <View style={styles.whyBox}>
+        <Text selectable style={[styles.whyLabel, { color: accent }]}>Pourquoi ça marche</Text>
+        <Text selectable style={styles.whyText}>{concept.why}</Text>
+      </View>
+
+      {concept.pattern ? (
+        <View style={styles.patternBox}>
+          <Text selectable style={styles.patternLabel}>Modele mental</Text>
+          <Text selectable style={styles.patternText}>{concept.pattern}</Text>
+        </View>
+      ) : null}
+
+      <View style={styles.exampleStack}>
+        {concept.examples.map((example, index) => (
+          <View key={`${concept.id}-ex-${index}`} style={styles.exampleRow}>
+            <View style={[styles.exampleRail, { backgroundColor: accent }]} />
+            <View style={{ flex: 1 }}>
+              <Text selectable style={styles.exampleIt}>{example.it}</Text>
+              <Text selectable style={styles.exampleFr}>{example.fr}</Text>
+              {example.note ? <Text selectable style={styles.exampleNote}>{example.note}</Text> : null}
+            </View>
+          </View>
+        ))}
+      </View>
+
+      {concept.memoryTip ? (
+        <View style={[styles.memoryBox, { backgroundColor: accent + '12' }]}>
+          <Text selectable style={[styles.memoryLabel, { color: accent }]}>Memoire active</Text>
+          <Text selectable style={styles.memoryText}>{concept.memoryTip}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -314,6 +395,35 @@ const styles = StyleSheet.create({
   headerTitle: { color: C.text, fontSize: 18, fontWeight: '900' },
   headerSub: { color: C.dim, fontSize: 12, fontWeight: '600', marginTop: 1 },
   scroll: { padding: 16, gap: 10, paddingBottom: 30 },
+  conceptStack: { gap: 12 },
+  conceptCard: {
+    backgroundColor: C.surface,
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 15,
+    gap: 12,
+    boxShadow: '0 2px 10px rgba(0,0,0,0.05)',
+  },
+  conceptHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  conceptBadge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
+  conceptBadgeText: { fontSize: 10, fontWeight: '900' },
+  conceptTitle: { flex: 1, color: C.text, fontSize: 18, fontWeight: '900' },
+  conceptRule: { color: C.text, fontSize: 15, lineHeight: 22, fontWeight: '700' },
+  whyBox: { backgroundColor: C.surface2, borderRadius: 14, padding: 12, gap: 4 },
+  whyLabel: { fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.4 },
+  whyText: { color: C.text, fontSize: 13, lineHeight: 19 },
+  patternBox: { borderRadius: 14, borderWidth: 1, borderColor: C.border, padding: 12, gap: 4 },
+  patternLabel: { color: C.dim, fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.4 },
+  patternText: { color: C.text, fontSize: 14, lineHeight: 20, fontWeight: '800' },
+  exampleStack: { gap: 9 },
+  exampleRow: { flexDirection: 'row', gap: 10 },
+  exampleRail: { width: 3, borderRadius: 99 },
+  exampleIt: { color: C.text, fontSize: 15, lineHeight: 20, fontWeight: '900' },
+  exampleFr: { color: C.muted, fontSize: 13, lineHeight: 18 },
+  exampleNote: { color: C.dim, fontSize: 12, lineHeight: 17, fontStyle: 'italic', marginTop: 2 },
+  memoryBox: { borderRadius: 14, padding: 12, gap: 3 },
+  memoryLabel: { fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.4 },
+  memoryText: { color: C.text, fontSize: 13, lineHeight: 19, fontWeight: '700' },
   tip: {
     backgroundColor: C.surface,
     borderRadius: 16,

@@ -27,7 +27,10 @@ import { playQuizSound, preloadQuizSounds } from '@/services/quiz-sounds';
 import {
   normaliseAnswer,
   speakableIt,
+  type AgreementTableQuestion,
   type BuildQuestion,
+  type ClozeQuestion,
+  type EndingChoiceQuestion,
   type ListenQuestion,
   type MatchQuestion,
   type QuizQuestion,
@@ -154,6 +157,12 @@ function QuestionRenderer({
       return <BuildView q={question} accentColor={accentColor} onResult={onResult} />;
     case 'type':
       return <TypeView q={question} accentColor={accentColor} onResult={onResult} />;
+    case 'ending-choice':
+      return <EndingChoiceView q={question} accentColor={accentColor} onResult={onResult} />;
+    case 'cloze':
+      return <ClozeView q={question} accentColor={accentColor} onResult={onResult} />;
+    case 'agreement-table':
+      return <AgreementTableView q={question} accentColor={accentColor} onResult={onResult} />;
     default:
       return null;
   }
@@ -335,6 +344,239 @@ function ListenView({
           />
         ))}
       </View>
+    </View>
+  );
+}
+
+// ─── Grammar: ending choice ─────────────────────────────────────────────────
+
+function EndingChoiceView({
+  q,
+  accentColor,
+  onResult,
+}: {
+  q: EndingChoiceQuestion;
+  accentColor: string;
+  onResult: (correct: boolean) => void;
+}) {
+  const tts = useItalianTTS();
+  const [picked, setPicked] = useState<string | null>(null);
+
+  const answer = useCallback(
+    (choice: string) => {
+      if (picked) return;
+      setPicked(choice);
+      const correct = normaliseAnswer(choice) === normaliseAnswer(q.correct);
+      if (correct) void successFeedback();
+      else void warningFeedback();
+      playQuizSound(correct ? 'correct' : 'wrong');
+      if (q.speakText) tts.speak(q.speakText, { rate: 0.85 });
+      onResult(correct);
+    },
+    [picked, q.correct, q.speakText, onResult, tts],
+  );
+
+  return (
+    <View style={styles.body}>
+      <Text selectable style={styles.instruction}>{q.title}</Text>
+      <Text selectable style={styles.grammarPrompt}>{q.prompt}</Text>
+      <View style={[styles.grammarFrame, { borderLeftColor: accentColor }]}>
+        <Text selectable style={styles.wordAssembly}>
+          {q.before}
+          <Text style={[styles.blankInline, { color: picked ? C.text : accentColor }]}>
+            {picked ?? '___'}
+          </Text>
+          {q.after ?? ''}
+        </Text>
+        {q.translation ? <Text selectable style={styles.translationText}>{q.translation}</Text> : null}
+      </View>
+      <View style={styles.choices}>
+        {q.choices.map((choice) => (
+          <ChoiceButton
+            key={choice}
+            label={choice}
+            disabled={Boolean(picked)}
+            state={!picked ? 'idle' : choice === q.correct ? 'correct' : choice === picked ? 'wrong' : 'idle'}
+            onPress={() => answer(choice)}
+          />
+        ))}
+      </View>
+      {picked ? (
+        <Animated.View entering={FadeInDown.duration(220)} style={styles.explanationBox}>
+          <Text selectable style={styles.explanationTitle}>Pourquoi ?</Text>
+          <Text selectable style={styles.explanationText}>{q.explanation}</Text>
+        </Animated.View>
+      ) : null}
+    </View>
+  );
+}
+
+// ─── Grammar: cloze listening ───────────────────────────────────────────────
+
+function ClozeView({
+  q,
+  accentColor,
+  onResult,
+}: {
+  q: ClozeQuestion;
+  accentColor: string;
+  onResult: (correct: boolean) => void;
+}) {
+  const tts = useItalianTTS();
+  const [picked, setPicked] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!q.speakText) return;
+    const t = setTimeout(() => tts.speak(q.speakText!, { rate: 0.78 }), 260);
+    return () => clearTimeout(t);
+  }, [q.speakText, tts]);
+
+  const answer = useCallback(
+    (choice: string) => {
+      if (picked) return;
+      setPicked(choice);
+      const correct = normaliseAnswer(choice) === normaliseAnswer(q.correct);
+      if (correct) void successFeedback();
+      else void warningFeedback();
+      playQuizSound(correct ? 'correct' : 'wrong');
+      onResult(correct);
+    },
+    [picked, q.correct, onResult],
+  );
+
+  return (
+    <View style={styles.body}>
+      <Text selectable style={styles.instruction}>{q.title}</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Ecouter la phrase"
+        onPress={() => q.speakText && tts.speak(q.speakText, { rate: 0.78 })}
+        style={[styles.listenCircle, { borderColor: accentColor }]}>
+        <Text style={[styles.listenCircleIcon, { color: accentColor }]}>🔊</Text>
+      </Pressable>
+      <Text selectable style={styles.grammarPrompt}>{q.prompt}</Text>
+      <Text selectable style={styles.clozeSentence}>
+        {q.before}
+        <Text style={[styles.clozeBlank, { color: picked ? C.text : accentColor }]}>
+          {picked ?? '____'}
+        </Text>
+        {q.after}
+      </Text>
+      {q.translation ? <Text selectable style={styles.translationText}>{q.translation}</Text> : null}
+      <View style={styles.choices}>
+        {q.choices.map((choice) => (
+          <ChoiceButton
+            key={choice}
+            label={choice}
+            disabled={Boolean(picked)}
+            state={!picked ? 'idle' : choice === q.correct ? 'correct' : choice === picked ? 'wrong' : 'idle'}
+            onPress={() => answer(choice)}
+          />
+        ))}
+      </View>
+      {picked ? (
+        <Animated.View entering={FadeInDown.duration(220)} style={styles.explanationBox}>
+          <Text selectable style={styles.explanationTitle}>Pourquoi ?</Text>
+          <Text selectable style={styles.explanationText}>{q.explanation}</Text>
+        </Animated.View>
+      ) : null}
+    </View>
+  );
+}
+
+// ─── Grammar: agreement table ───────────────────────────────────────────────
+
+function AgreementTableView({
+  q,
+  accentColor,
+  onResult,
+}: {
+  q: AgreementTableQuestion;
+  accentColor: string;
+  onResult: (correct: boolean) => void;
+}) {
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [checked, setChecked] = useState<'idle' | 'correct' | 'wrong'>('idle');
+  const selectedCount = Object.keys(answers).length;
+
+  const pick = useCallback((rowId: string, value: string) => {
+    if (checked !== 'idle') return;
+    setAnswers((current) => ({ ...current, [rowId]: value }));
+    playQuizSound('tap');
+  }, [checked]);
+
+  const check = useCallback(() => {
+    const correct = q.rows.every((row) => normaliseAnswer(answers[row.id] ?? '') === normaliseAnswer(row.correct));
+    setChecked(correct ? 'correct' : 'wrong');
+    if (correct) void successFeedback();
+    else void warningFeedback();
+    playQuizSound(correct ? 'correct' : 'wrong');
+    onResult(correct);
+  }, [answers, q.rows, onResult]);
+
+  return (
+    <View style={styles.body}>
+      <Text selectable style={styles.instruction}>{q.title}</Text>
+      <Text selectable style={styles.tableTitle}>{q.prompt}</Text>
+      <View style={[styles.tableFrame, { borderLeftColor: accentColor }]}>
+        {q.rows.map((row) => {
+          const picked = answers[row.id];
+          const isRight = checked !== 'idle' && picked === row.correct;
+          const isWrong = checked !== 'idle' && picked !== row.correct;
+          return (
+            <View key={row.id} style={styles.tableRow}>
+              <View style={{ flex: 1, gap: 3 }}>
+                <Text selectable style={styles.tableSentence}>
+                  {row.before}
+                  <Text style={[
+                    styles.tableBlank,
+                    picked && { color: C.text },
+                    isRight && { color: C.primaryDark },
+                    isWrong && { color: C.red },
+                  ]}>
+                    {picked ?? '_'}
+                  </Text>
+                  {row.after ?? ''}
+                </Text>
+                {row.translation ? <Text selectable style={styles.translationText}>{row.translation}</Text> : null}
+              </View>
+              <View style={styles.suffixBank}>
+                {q.choices.map((choice) => (
+                  <Pressable
+                    key={`${row.id}-${choice}`}
+                    disabled={checked !== 'idle'}
+                    onPress={() => pick(row.id, choice)}
+                    style={[
+                      styles.suffixChip,
+                      picked === choice && { borderColor: accentColor, backgroundColor: accentColor + '18' },
+                    ]}>
+                    <Text style={[styles.suffixChipText, picked === choice && { color: accentColor }]}>{choice}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          );
+        })}
+      </View>
+      {checked === 'idle' ? (
+        <Pressable
+          disabled={selectedCount < q.rows.length}
+          onPress={check}
+          style={[
+            styles.primaryBtn,
+            { backgroundColor: accentColor },
+            selectedCount < q.rows.length && styles.primaryBtnDisabled,
+          ]}>
+          <Text style={styles.primaryBtnText}>Vérifier</Text>
+        </Pressable>
+      ) : (
+        <Animated.View entering={FadeInDown.duration(220)} style={styles.explanationBox}>
+          <Text selectable style={[styles.explanationTitle, { color: checked === 'correct' ? C.primaryDark : C.red }]}>
+            {checked === 'correct' ? 'Accords corrects' : 'Correction'}
+          </Text>
+          <Text selectable style={styles.explanationText}>{q.explanation}</Text>
+        </Animated.View>
+      )}
     </View>
   );
 }
@@ -721,6 +963,65 @@ const styles = StyleSheet.create({
   choiceCorrect: { borderColor: C.primary, backgroundColor: C.primarySoft },
   choiceWrong: { borderColor: C.red, backgroundColor: C.redSoft },
   choiceText: { color: C.text, fontSize: 16, fontWeight: '800', textAlign: 'center' },
+  grammarPrompt: { color: C.muted, fontSize: 15, lineHeight: 21, fontWeight: '700' },
+  grammarFrame: {
+    backgroundColor: C.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderLeftWidth: 4,
+    borderColor: C.border,
+    padding: 16,
+    gap: 8,
+  },
+  wordAssembly: { color: C.text, fontSize: 38, lineHeight: 46, fontWeight: '900', textAlign: 'center' },
+  blankInline: { fontWeight: '900' },
+  translationText: { color: C.muted, fontSize: 14, lineHeight: 19 },
+  explanationBox: {
+    backgroundColor: C.surface2,
+    borderRadius: 14,
+    padding: 13,
+    gap: 4,
+  },
+  explanationTitle: { color: C.text, fontSize: 13, fontWeight: '900' },
+  explanationText: { color: C.muted, fontSize: 13, lineHeight: 19, fontWeight: '600' },
+  listenCircle: {
+    width: 112,
+    height: 112,
+    borderRadius: 56,
+    borderWidth: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    backgroundColor: C.surface,
+  },
+  listenCircleIcon: { fontSize: 40 },
+  clozeSentence: { color: C.text, fontSize: 32, lineHeight: 42, fontWeight: '800', textAlign: 'center' },
+  clozeBlank: { fontWeight: '900', textDecorationLine: 'underline' },
+  tableTitle: { color: C.text, fontSize: 30, fontWeight: '900' },
+  tableFrame: {
+    backgroundColor: C.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderLeftWidth: 4,
+    borderColor: C.border,
+    padding: 14,
+    gap: 14,
+  },
+  tableRow: { gap: 10 },
+  tableSentence: { color: C.text, fontSize: 25, lineHeight: 33, fontWeight: '800' },
+  tableBlank: { color: C.dim, fontWeight: '900', textDecorationLine: 'underline' },
+  suffixBank: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  suffixChip: {
+    minWidth: 48,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: C.border,
+    backgroundColor: C.surface,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  suffixChipText: { color: C.text, fontSize: 15, fontWeight: '900' },
   speakerWrap: { alignItems: 'center', gap: 12, paddingVertical: 12 },
   speakerBtn: { width: 96, height: 96, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
   speakerIcon: { fontSize: 40 },
