@@ -32,6 +32,7 @@ import {
   type ClozeQuestion,
   type EndingChoiceQuestion,
   type ListenQuestion,
+  type MatchPair,
   type MatchQuestion,
   type QuizQuestion,
   type TranslateQuestion,
@@ -228,6 +229,43 @@ function ChoiceButton({
   );
 }
 
+function startsWithPunctuation(value: string): boolean {
+  return /^[,.;:!?)]/.test(value.trimStart());
+}
+
+function isShortEnding(value: string): boolean {
+  const clean = value.trim().replace(/^-/, '');
+  return clean.length <= 2 && /^[\p{L}'’]+$/u.test(clean);
+}
+
+function needsWordGap(left: string, right?: string): boolean {
+  if (!right) return false;
+  if (!left || /\s$/.test(left) || /^\s/.test(right)) return false;
+  if (startsWithPunctuation(right)) return false;
+  return true;
+}
+
+function inlineCompletionParts({
+  before,
+  answer,
+  after,
+  mode,
+}: {
+  before: string;
+  answer: string;
+  after?: string;
+  mode: 'ending' | 'cloze';
+}): { beforeText: string; answerText: string; afterText: string } {
+  const gapBeforeAnswer = mode === 'cloze' || !isShortEnding(answer) ? needsWordGap(before, answer) : false;
+  const answerText = `${gapBeforeAnswer ? ' ' : ''}${answer}`;
+  const gapAfterAnswer = needsWordGap(answer, after);
+  return {
+    beforeText: before,
+    answerText,
+    afterText: after ? `${gapAfterAnswer ? ' ' : ''}${after}` : '',
+  };
+}
+
 // ─── Translate ────────────────────────────────────────────────────────────────
 
 function TranslateView({
@@ -361,6 +399,12 @@ function EndingChoiceView({
 }) {
   const tts = useItalianTTS();
   const [picked, setPicked] = useState<string | null>(null);
+  const display = inlineCompletionParts({
+    before: q.before,
+    answer: picked ?? '___',
+    after: q.after,
+    mode: 'ending',
+  });
 
   const answer = useCallback(
     (choice: string) => {
@@ -382,11 +426,11 @@ function EndingChoiceView({
       <Text selectable style={styles.grammarPrompt}>{q.prompt}</Text>
       <View style={[styles.grammarFrame, { borderLeftColor: accentColor }]}>
         <Text selectable style={styles.wordAssembly}>
-          {q.before}
+          {display.beforeText}
           <Text style={[styles.blankInline, { color: picked ? C.text : accentColor }]}>
-            {picked ?? '___'}
+            {display.answerText}
           </Text>
-          {q.after ?? ''}
+          {display.afterText}
         </Text>
         {q.translation ? <Text selectable style={styles.translationText}>{q.translation}</Text> : null}
       </View>
@@ -424,6 +468,12 @@ function ClozeView({
 }) {
   const tts = useItalianTTS();
   const [picked, setPicked] = useState<string | null>(null);
+  const display = inlineCompletionParts({
+    before: q.before,
+    answer: picked ?? '____',
+    after: q.after,
+    mode: 'cloze',
+  });
 
   useEffect(() => {
     if (!q.speakText) return;
@@ -456,11 +506,11 @@ function ClozeView({
       </Pressable>
       <Text selectable style={styles.grammarPrompt}>{q.prompt}</Text>
       <Text selectable style={styles.clozeSentence}>
-        {q.before}
+        {display.beforeText}
         <Text style={[styles.clozeBlank, { color: picked ? C.text : accentColor }]}>
-          {picked ?? '____'}
+          {display.answerText}
         </Text>
-        {q.after}
+        {display.afterText}
       </Text>
       {q.translation ? <Text selectable style={styles.translationText}>{q.translation}</Text> : null}
       <View style={styles.choices}>
@@ -593,6 +643,30 @@ function stableHash(value: string): number {
   return hash >>> 0;
 }
 
+function derangeMatchPairs(pairs: MatchPair[], questionId: string): MatchPair[] {
+  if (pairs.length <= 1) return [...pairs];
+
+  const ordered = [...pairs].sort(
+    (a, b) => stableHash(`${questionId}:fr:${a.id}`) - stableHash(`${questionId}:fr:${b.id}`),
+  );
+
+  for (let offset = 1; offset < ordered.length; offset++) {
+    const rotated = ordered.map((_, index) => ordered[(index + offset) % ordered.length]!);
+    const hasAlignedPair = rotated.some((pair, index) => pair.id === pairs[index]?.id);
+    if (!hasAlignedPair) return rotated;
+  }
+
+  // Fallback for unusual duplicate/short inputs: swap any aligned row with the
+  // next row so the answer is not visually placed opposite its prompt.
+  const fallback = [...ordered];
+  for (let index = 0; index < fallback.length; index++) {
+    if (fallback[index]?.id !== pairs[index]?.id) continue;
+    const swapIndex = (index + 1) % fallback.length;
+    [fallback[index], fallback[swapIndex]] = [fallback[swapIndex]!, fallback[index]!];
+  }
+  return fallback;
+}
+
 function MatchView({
   q,
   accentColor,
@@ -605,10 +679,7 @@ function MatchView({
   const tts = useItalianTTS();
   const itColumn = useMemo(() => q.pairs.map((p) => ({ key: p.id, text: p.it })), [q.pairs]);
   const frColumn = useMemo(
-    () =>
-      [...q.pairs]
-        .sort((a, b) => stableHash(`${q.id}:${a.id}`) - stableHash(`${q.id}:${b.id}`))
-        .map((p) => ({ key: p.id, text: p.fr })),
+    () => derangeMatchPairs(q.pairs, q.id).map((p) => ({ key: p.id, text: p.fr })),
     [q.id, q.pairs],
   );
   const [selectedIt, setSelectedIt] = useState<string | null>(null);

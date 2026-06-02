@@ -202,6 +202,46 @@ function isUsable(item: VocabItem): boolean {
   return Boolean(item.it?.trim()) && Boolean(item.fr?.trim());
 }
 
+function cleanMatchItalian(value: string): string {
+  const clean = stripAnnotations(value).trim();
+  const hasSyllableMarkers = /(\p{L})-(\p{L})/u.test(clean);
+  const withoutMarkers = clean.replace(/(\p{L})-(\p{L})/gu, '$1$2').replace(/\s+/g, ' ').trim();
+  return hasSyllableMarkers ? withoutMarkers.toLocaleLowerCase('it-IT') : withoutMarkers;
+}
+
+function isPedagogicalLabel(value: string): boolean {
+  return /\b(vs|prononciation|prononce|prononcer|phoneme|phonème|son|sons|accent|voyelle|retenir|tenir|ouvert|ferme|fermé|jamais|roule|roulé|pointe|langue|consonnes?)\b|\[[^\]]+\]/i.test(value);
+}
+
+function meaningfulLetterLength(value: string): number {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}'’]/gu, '')
+    .length;
+}
+
+function isMatchable(item: VocabItem): boolean {
+  const it = cleanMatchItalian(item.it);
+  const fr = cleanMeaning(item.fr);
+  if (!it || !fr) return false;
+  if (meaningfulLetterLength(it) <= 1 || meaningfulLetterLength(fr) <= 1) return false;
+  if (isPedagogicalLabel(it) || isPedagogicalLabel(fr)) return false;
+  if (it.length > 34 || fr.length > 42) return false;
+  return true;
+}
+
+function isTypeableItalian(item: VocabItem): boolean {
+  const it = cleanMatchItalian(item.it);
+  const fr = cleanMeaning(item.fr);
+  if (!it || !fr) return false;
+  if (meaningfulLetterLength(it) <= 1 || meaningfulLetterLength(fr) <= 1) return false;
+  if (isPedagogicalLabel(it) || isPedagogicalLabel(fr)) return false;
+  if (/[=→]| vs |\/.*\/|^\d/.test(it)) return false;
+  if (it.length > 42 || fr.length > 70) return false;
+  return true;
+}
+
 function pickDistractors(pool: string[], exclude: string, count: number): string[] {
   const unique = Array.from(new Set(pool.filter((value) => value !== exclude)));
   return shuffle(unique).slice(0, count);
@@ -285,12 +325,13 @@ export function buildLessonQuiz(lesson: LessonDetail): QuizQuestion[] {
   });
 
   // 1 — Match question (always first if we have ≥3 pairs; warm, satisfying start).
-  if (vocab.length >= 3) {
-    const sample = shuffle(vocab).slice(0, Math.min(4, vocab.length));
+  const matchableVocab = vocab.filter(isMatchable);
+  if (matchableVocab.length >= 3) {
+    const sample = shuffle(matchableVocab).slice(0, Math.min(4, matchableVocab.length));
     questions.push({
       id: `${lesson.id}-match`,
       type: 'match',
-      pairs: sample.map((v, i) => ({ id: `${lesson.id}-pair-${i}`, it: v.it.trim(), fr: cleanMeaning(v.fr) })),
+      pairs: sample.map((v, i) => ({ id: `${lesson.id}-pair-${i}`, it: cleanMatchItalian(v.it), fr: cleanMeaning(v.fr) })),
     });
   }
 
@@ -310,6 +351,7 @@ export function buildLessonQuiz(lesson: LessonDetail): QuizQuestion[] {
   }
 
   // 3 — Core item questions: alternate translate / listen / type.
+  const typeableVocab = vocab.filter(isTypeableItalian);
   const coreItems = shuffle(vocab).slice(0, 6);
   coreItems.forEach((item, index) => {
     const correct = cleanMeaning(item.fr);
@@ -336,15 +378,19 @@ export function buildLessonQuiz(lesson: LessonDetail): QuizQuestion[] {
         speakText: speakableIt(it),
       });
     } else {
+      const typeItem = typeableVocab[index % Math.max(typeableVocab.length, 1)];
+      if (!typeItem) return;
+      const typeCorrect = cleanMeaning(typeItem.fr);
+      const typeIt = typeItem.it.trim();
       // Harder: free typing with timer. Accept every Italian variant.
       questions.push({
         id: `${lesson.id}-ty-${index}`,
         type: 'type',
-        prompt: correct,
-        phonetic: item.phonetic,
-        accepted: acceptedItVariants(it),
+        prompt: typeCorrect,
+        phonetic: typeItem.phonetic,
+        accepted: acceptedItVariants(typeIt),
         timerSeconds: 25,
-        speakText: speakableIt(it),
+        speakText: speakableIt(typeIt),
       });
     }
   });

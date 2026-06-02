@@ -74,7 +74,6 @@ export default function LessonScreen() {
   const tts = useItalianTTS();
   const aiQuestions = aiQuiz && aiQuiz.lessonId === lesson?.id ? aiQuiz.questions : null;
   const quiz = aiQuestions?.length ? aiQuestions : staticQuiz;
-  const isAiQuiz = Boolean(aiQuestions?.length);
 
   useEffect(() => {
     if (!lesson || !hasLessonQuizAiAvailable()) return;
@@ -186,9 +185,7 @@ export default function LessonScreen() {
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>{lesson.title}</Text>
-          <Text style={styles.headerSub}>
-            {lesson.vocab.length} mots · quiz {quiz.length} questions{isAiQuiz ? ' · variation IA' : ''}
-          </Text>
+          <Text style={styles.headerSub}>{lesson.vocab.length} mots · quiz {quiz.length} questions</Text>
         </View>
       </View>
 

@@ -91,6 +91,75 @@ function isShortMobileText(value: string, maxWords = 10): boolean {
   return value.trim().split(/\s+/).length <= maxWords;
 }
 
+function startsWithPunctuation(value: string): boolean {
+  return /^[,.;:!?)]/.test(value.trimStart());
+}
+
+function isShortEnding(value: string): boolean {
+  const clean = value.trim().replace(/^-/, '');
+  return clean.length <= 2 && /^[\p{L}'’]+$/u.test(clean);
+}
+
+function needsWordGap(left: string, right?: string): boolean {
+  if (!right) return false;
+  if (!left || /\s$/.test(left) || /^\s/.test(right)) return false;
+  if (startsWithPunctuation(right)) return false;
+  return true;
+}
+
+function assembleCompletionText(
+  before: string,
+  answer: string,
+  after: string | undefined,
+  mode: 'ending' | 'cloze',
+): string {
+  const gapBeforeAnswer = mode === 'cloze' || !isShortEnding(answer) ? needsWordGap(before, answer) : false;
+  const gapAfterAnswer = needsWordGap(answer, after);
+  return `${before}${gapBeforeAnswer ? ' ' : ''}${answer}${after ? `${gapAfterAnswer ? ' ' : ''}${after}` : ''}`;
+}
+
+function normalizeLetters(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}'’]/gu, '');
+}
+
+function extractQuotedTarget(value: string): string | null {
+  const match = value.match(/["“”'‘’]([^"“”'‘’]{2,40})["“”'‘’]/);
+  return match?.[1]?.trim() ?? null;
+}
+
+function isPronunciationTask(title: string, prompt: string): boolean {
+  return /\b(prononciation|prononce|prononcer|phoneme|phonème|son|sons|\[[^\]]+\])\b/i.test(`${title} ${prompt}`);
+}
+
+function hasCompatibleTarget({
+  assembled,
+  prompt,
+  speakText,
+}: {
+  assembled: string;
+  prompt: string;
+  speakText?: string;
+}): boolean {
+  const assembledNorm = normalizeLetters(assembled);
+  if (!assembledNorm) return false;
+
+  const quotedTarget = extractQuotedTarget(prompt);
+  if (quotedTarget) {
+    return normalizeLetters(quotedTarget) === assembledNorm;
+  }
+
+  if (speakText) {
+    const spokenNorm = normalizeLetters(speakText);
+    if (spokenNorm.length > 0 && spokenNorm.length <= 24) return spokenNorm === assembledNorm;
+  }
+
+  return true;
+}
+
 function normalizeQuestion(raw: unknown, index: number, lessonId: string): (AiQuestion & { id: string }) | null {
   if (!isRecord(raw)) return null;
   const type = raw.type;
@@ -102,9 +171,13 @@ function normalizeQuestion(raw: unknown, index: number, lessonId: string): (AiQu
     const correct = cleanText(raw.correct, 24);
     const explanation = cleanText(raw.explanation, 220);
     if (!title || !prompt || !before || !correct || !explanation) return null;
+    if (isPronunciationTask(title, prompt)) return null;
     const choices = cleanChoices(raw.choices, correct);
     if (!choices) return null;
     const after = cleanText(raw.after, 80) ?? undefined;
+    const fallbackSpeakText = assembleCompletionText(before, correct, after, 'ending');
+    const providedSpeakText = cleanText(raw.speakText, 120) ?? undefined;
+    if (!hasCompatibleTarget({ assembled: fallbackSpeakText, prompt, speakText: providedSpeakText })) return null;
     return {
       id: `ai-${lessonId}-ending-${Date.now()}-${index}`,
       type: 'ending-choice',
@@ -116,7 +189,7 @@ function normalizeQuestion(raw: unknown, index: number, lessonId: string): (AiQu
       choices,
       translation: cleanText(raw.translation, 120) ?? undefined,
       explanation,
-      speakText: cleanText(raw.speakText, 120) ?? `${before}${correct}${after ?? ''}`,
+      speakText: providedSpeakText ?? fallbackSpeakText,
     };
   }
 
@@ -130,7 +203,7 @@ function normalizeQuestion(raw: unknown, index: number, lessonId: string): (AiQu
     if (!title || !prompt || !before || !after || !correct || !explanation) return null;
     const choices = cleanChoices(raw.choices, correct);
     if (!choices) return null;
-    const fullSentence = `${before}${correct}${after}`;
+    const fullSentence = assembleCompletionText(before, correct, after, 'cloze');
     if (!isShortMobileText(fullSentence, 12)) return null;
     return {
       id: `ai-${lessonId}-cloze-${Date.now()}-${index}`,
@@ -272,6 +345,8 @@ Regles strictes:
 - Phrases italiennes tres courtes: maximum 8 mots pour translate/listen, maximum 12 mots pour cloze.
 - Les choix doivent contenir la bonne reponse.
 - Les distracteurs doivent etre plausibles mais pedagogiquement utiles.
+- Ne JAMAIS utiliser "ending-choice" pour une question de prononciation, de phoneme ou de son.
+- Respecte strictement l'orthographe italienne: pizza = deux z, gnocchi = gn, figlio = gli. Si un mot cible est cite, le mot assemble doit etre exactement ce mot.
 - Donne une explication francaise pour ending-choice et cloze.
 - Ne genere pas de contenu culturel hors sujet, pas de phrases longues.`;
 
